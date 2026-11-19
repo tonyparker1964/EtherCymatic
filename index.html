@@ -121,7 +121,8 @@ button:disabled { opacity: .45; cursor: default; }
       </select>
       <label class="small" for="scale">Tuning</label>
       <select id="scale">
-        <option value="penta">Pentatonic (always consonant)</option>
+        <option value="exact" selected>Exact (every word its own tone)</option>
+        <option value="penta">Pentatonic (musical; words can share tones)</option>
         <option value="chrom">Chromatic (one semitone per step)</option>
         <option value="solf">Solfeggio set (174–963 Hz)</option>
       </select>
@@ -179,6 +180,8 @@ button:disabled { opacity: .45; cursor: default; }
         <button id="mWater">Water</button>
         <button id="mPlasma">Plasma</button>
       </div>
+      <label class="check"><input type="checkbox" id="physics" checked> Real plate physics (sand)</label>
+      <p class="note" id="physNote">An ideal 30 cm × 1 mm brass plate. Sand only settles near the plate's resonant pitches, and every overtone in the sound shapes the lines. Between resonances the pattern stays faint, as on a real plate.</p>
       <h2 style="margin-top:8px">Colour</h2>
       <div class="swatches" id="swatches" role="group" aria-label="Light colour"></div>
       <div class="swname" id="swName" aria-live="polite"><b>From the pitch</b> · each note glows its own colour</div>
@@ -277,9 +280,18 @@ function charValue(ch) {
   const c = ch.toLowerCase();
   return c >= "a" && c <= "z" ? c.charCodeAt(0) - 96 : c >= "0" && c <= "9" ? +c : 0;
 }
-const letterHz = (ch, scale) => { const v = charValue(ch); return v ? stepHz(v - 1, scale) : null; };
+// Exact tuning: a fingerprint (FNV-1a hash) of the word's letters, in order, picks a precise pitch
+// between 110 and 1760 Hz. Different words, anagrams included, get different tones.
+function exactHz(text) {
+  const t = text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  if (!t) return null;
+  let h = 0x811c9dc5;
+  for (let i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return 110 * Math.pow(2, 4 * (h / 4294967296));
+}
+const letterHz = (ch, scale) => { const v = charValue(ch); return !v ? null : scale === "exact" ? exactHz(ch) : stepHz(v - 1, scale); };
 function wordSum(w) { return [...w].reduce((s, ch) => s + charValue(ch), 0); }
-const wordHz = (w, scale) => { const s = wordSum(w); return s ? stepHz(s - 1, scale) : null; };
+const wordHz = (w, scale) => { const s = wordSum(w); return !s ? null : scale === "exact" ? exactHz(w) : stepHz(s - 1, scale); };
 
 // Turn the text into what gets played: [{text, hz, len (in beats), sum?}]
 function units() {
@@ -303,7 +315,8 @@ function renderLetters() {
     if (u.gap) s.hidden = true;
     s.textContent = u.text;
     const sm = document.createElement("small");
-    sm.textContent = u.hz ? (u.sum ? `Σ${u.sum} · ` : "") + Math.round(u.hz) + " Hz" : "rest";
+    const exact = $("scale").value === "exact";
+    sm.textContent = u.hz ? (u.sum && !exact ? `Σ${u.sum} · ` : "") + (exact ? u.hz.toFixed(2) : Math.round(u.hz)) + " Hz" : "rest";
     s.appendChild(sm); box.appendChild(s);
   });
   $("tempoLabel").firstChild.textContent = $("playAs").value === "letters" ? "Letter length " : "Speed (per letter) ";
@@ -315,7 +328,7 @@ $("tempo").addEventListener("input", e => $("tempoOut").textContent = e.target.v
 renderLetters();
 
 function stopWords() {
-  seqNodes.forEach(n => { try { n.stop(); } catch(e){} }); seqNodes = [];
+  seqNodes.forEach(n => { try { n.stop(); } catch(e){} }); seqNodes = []; seqHz = null;
   seqTimers.forEach(clearTimeout); seqTimers = [];
   document.querySelectorAll(".letters span.live").forEach(s => s.classList.remove("live"));
   try { speechSynthesis.cancel(); } catch(e){}
@@ -331,7 +344,7 @@ $("playWords").onclick = () => {
     const t = t0 + beatAt*beat, dur = u.len*beat; beatAt += u.len;
     seqTimers.push(setTimeout(() => {
       [...spans].forEach(s => s.classList.remove("live")); spans[i] && spans[i].classList.add("live");
-      if (u.hz) { target = u.hz; if (single) label = u.text; }
+      if (u.hz) { target = u.hz; seqHz = u.hz; if (single) label = u.text; }
     }, (t - ac.currentTime)*1000));
     if (!u.hz) return;
     // auto-capture: just before the tone fades, once the pattern has settled on it
@@ -352,7 +365,7 @@ $("playWords").onclick = () => {
   if (!single && $("autoSnap").checked && beatAt > 0)
     seqTimers.push(setTimeout(() => { label = text.trim(); snapStill(true); }, (t0 + (beatAt - 0.15)*beat - ac.currentTime)*1000));
   seqTimers.push(setTimeout(() => {
-    [...spans].forEach(s => s.classList.remove("live")); seqNodes = []; label = text.trim();
+    [...spans].forEach(s => s.classList.remove("live")); seqNodes = []; seqHz = null; label = text.trim();
   }, (t0 - ac.currentTime + beatAt*beat)*1000 + 300));
   if ($("speak").checked) { try { const u = new SpeechSynthesisUtterance(text); u.rate = 0.9; speechSynthesis.speak(u); } catch(e){} }
 };
@@ -462,7 +475,8 @@ $("speakIn").onclick = () => {
 const anySound = () => !!micStream || !!toneOsc ||seqNodes.length > 0 || (audioEl && !audioEl.paused);
 
 // ---------- analysis ----------
-let target = 440, freqSm = 440, level = 0.18, levelSm = 0.18, mediumSm = 0;
+let target = 440, freqSm = 440, level = 0.18, levelSm = 0.18, mediumSm = 0, seqHz = null;
+let spec = [{ f: 440, a: 1 }];   // strongest spectral peaks: the fundamental, its overtones, other notes
 function analyse() {
   if (!analyser) return;
   analyser.getFloatTimeDomainData(timeData);
@@ -477,6 +491,59 @@ function analyse() {
   const a = freqData[best-1], b = freqData[best], c = freqData[best+1];
   const off = 0.5*(a-c)/(a-2*b+c || 1);                       // parabolic peak refinement
   target = (best + (isFinite(off)?off:0)) * binHz;
+  // up to 6 strongest peaks between 30 Hz and 8 kHz, within 35 dB of the loudest
+  const hiS = Math.min(freqData.length - 2, Math.floor(8000/binHz));
+  let maxdb = -Infinity; for (let i=lo;i<hiS;i++) if (freqData[i] > maxdb) maxdb = freqData[i];
+  const peaks = [];
+  for (let i=lo+1;i<hiS;i++) {
+    const d = freqData[i];
+    if (d > maxdb - 35 && d > freqData[i-1] && d >= freqData[i+1]) {
+      const o = 0.5*(freqData[i-1]-freqData[i+1])/(freqData[i-1]-2*d+freqData[i+1] || 1);
+      peaks.push({ f: (i + (isFinite(o) ? o : 0)) * binHz, a: Math.pow(10, d/20) });
+    }
+  }
+  peaks.sort((x, y) => y.a - x.a); spec = peaks.slice(0, 6);
+  // when the app made the sound itself it knows the pitch exactly: use it instead of the estimate
+  const known = toneOsc ? toneHz : seqHz;
+  if (known) {
+    target = known;
+    const near = spec.find(p => Math.abs(Math.log(p.f/known)) < 0.03);
+    if (near) near.f = known; else spec.unshift({ f: known, a: spec.length ? spec[0].a : 1 });
+    spec = spec.slice(0, 6);
+  }
+  if (!spec.length) spec = [{ f: target, a: 1 }];
+}
+
+// ---------- real plate physics ----------
+// Ideal square brass plate, 30 cm wide and 1 mm thick, edges free to vibrate.
+// Thin-plate (Kirchhoff) theory: mode (n, m) resonates at f = C·(n² + m²), with
+// C = (π/2)·√(D/ρh)/L² ≈ 18.1 Hz for these dimensions (E = 100 GPa, ρ = 8500 kg/m³, ν = 0.3).
+// Each (n, m) pair gives two shapes, the sum and the difference of the two crossed cosines; on a
+// free plate they split slightly in pitch (here ±1.5%). A sound drives every mode, and each answers
+// with the usual resonance curve (damping Q = 50).
+// Sand settles where the plate's motion, summed over every overtone, is smallest.
+const PLATE_C = 18.1, PLATE_Q = 50, MODES = [];
+for (let n = 0; n <= 18; n++) for (let m = n + 1; m <= 18; m++)
+  for (const sg of [-1, 1]) MODES.push({ n, m, sg, f: PLATE_C * (n*n + m*m) * (1 + 0.015*sg) });
+MODES.sort((x, y) => x.f - y.f);
+const pm = new Float32Array(24 * 4);
+function plateModel() {
+  pm.fill(0);
+  let meanE = 0, num = 0, den = 0, best = null, bestMag = 0;
+  spec.slice(0, 6).forEach((s, j) => {
+    const near = MODES.map(md => ({ md, d: Math.abs(Math.log(md.f / s.f)) })).sort((x, y) => x.d - y.d).slice(0, 4);
+    let peak = 0;
+    near.forEach(({ md }, i) => {
+      const fn2 = md.f*md.f, df = fn2 - s.f*s.f, damp = s.f*md.f/PLATE_Q, D = df*df + damp*damp;
+      const re = fn2*df/D, im = -fn2*damp/D, mag = Math.hypot(re, im);
+      const k = (j*4 + i)*4; pm[k] = md.n; pm[k+1] = md.m * md.sg; pm[k+2] = re*s.a; pm[k+3] = im*s.a;
+      meanE += (re*re + im*im) * s.a*s.a * 0.5;
+      peak = Math.max(peak, mag / PLATE_Q);
+      if (j === 0 && mag > bestMag) { bestMag = mag; best = md; }
+    });
+    num += s.a*s.a*peak; den += s.a*s.a;
+  });
+  return { meanE: Math.max(meanE, 1e-12), strength: den ? num/den : 0, best };
 }
 
 // ---------- WebGL ----------
@@ -485,7 +552,23 @@ const VS = "attribute vec2 p;void main(){gl_Position=vec4(p,0,1);}";
 const FS = `
 precision highp float;
 uniform vec2 R; uniform float T, A, L, M, NEG, RAIN, VIS; uniform vec3 C;
+uniform vec4 PM[24]; uniform float PN, PS, PHY;   // real plate: modes (n, m, re, im) per overtone, mean energy, resonance, on/off
 #define PI 3.14159265
+float realPlate(vec2 uv){
+  vec2 q = uv*0.5 + 0.5;            // plate coordinates 0..1
+  float E = 0.0;
+  for (int j = 0; j < 6; j++) {
+    float re = 0.0, im = 0.0;
+    for (int i = 0; i < 4; i++) {
+      vec4 md = PM[j*4 + i];
+      float mm = abs(md.y), sg = sign(md.y);   // sign of m encodes the sum (+) or difference (−) shape
+      float phi = cos(PI*md.x*q.x)*cos(PI*mm*q.y) + sg*cos(PI*mm*q.x)*cos(PI*md.x*q.y);
+      re += md.z*phi; im += md.w*phi;
+    }
+    E += re*re + im*im;             // time-averaged motion from this overtone
+  }
+  return sqrt(E / PN) * 0.6;
+}
 float plate(vec2 p, float a){
   float n = a, m = a*0.62 + 1.0;
   float s = cos(PI*n*p.x)*cos(PI*m*p.y) - cos(PI*m*p.x)*cos(PI*n*p.y);
@@ -517,7 +600,7 @@ float plasma(vec2 p, float a){
 void main(){
   vec2 uv = (gl_FragCoord.xy - 0.5*R) / min(R.x, R.y) * 2.15;
   float a = A, jitter = 0.004*L*sin(T*40.0);
-  float vp = plate(uv*0.5+0.0 + jitter, a);
+  float vp = PHY > 0.5 ? realPlate(uv) : plate(uv*0.5+0.0 + jitter, a);
   float vw = water(uv*0.95, a);
   float vz = plasma(uv*0.95, a);
   float wP = clamp(1.0 - M, 0.0, 1.0), wW = clamp(1.0 - abs(M - 1.0), 0.0, 1.0), wZ = clamp(M - 1.0, 0.0, 1.0);
@@ -526,8 +609,8 @@ void main(){
   float mask = mix(1.0 - smoothstep(0.98, 1.0, max(abs(uv.x), abs(uv.y))), 1.0 - smoothstep(0.97, 1.0, length(uv)), Mc);
   float frame = mix(smoothstep(0.985,1.0,max(abs(uv.x),abs(uv.y))) * (1.0-smoothstep(1.0,1.015,max(abs(uv.x),abs(uv.y)))),
                     smoothstep(0.985,1.0,length(uv)) * (1.0-smoothstep(1.0,1.015,length(uv))), Mc);
-  float e = 0.25 + 0.9*L;
-  float core = exp(-abs(v)*mix(70.0, 45.0, L));
+  float e = (0.25 + 0.9*L) * mix(1.0, 0.12 + 0.88*PS, wP*PHY);   // real plate: faint away from resonance
+  float core = exp(-abs(v)*mix(mix(70.0, 45.0, L), mix(7.0, 26.0, PS), wP*PHY));
   float halo = exp(-abs(v)*7.0)*0.32;
   float body = (0.5+0.5*v)*0.05;
   vec3 base = C;
@@ -553,6 +636,11 @@ gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,3,-1,-1,3]), gl.STATIC_DR
 const loc = gl.getAttribLocation(pr, "p"); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
 const U = n => gl.getUniformLocation(pr, n);
 const uR=U("R"), uT=U("T"), uA=U("A"), uL=U("L"), uM=U("M"), uC=U("C"), uN=U("NEG"), uW=U("RAIN"), uV=U("VIS");
+const uPM=U("PM[0]"), uPN=U("PN"), uPS=U("PS"), uPHY=U("PHY");
+let physics = true, psSm = 0, plateInfo = { best: null, strength: 0 };
+try { physics = localStorage.getItem("cym-physics") !== "0"; } catch (e) {}
+$("physics").checked = physics; $("physNote").hidden = !physics;
+$("physics").onchange = e => { physics = e.target.checked; $("physNote").hidden = !physics; try { localStorage.setItem("cym-physics", physics ? "1" : "0"); } catch (err) {} };
 
 // colour choice: from the pitch, a fixed spectral colour, rainbow, white, or black on white
 const COLOURS = [
@@ -609,7 +697,7 @@ function frame(t){
   analyse();
   const live = anySound() && level > 0.01;
   const tgtLevel = live ? Math.max(0.25, level) : 0.18;
-  if (!live && !anySound()) target = toneHz;
+  if (!live && !anySound()) { target = toneHz; spec = [{ f: toneHz, a: 1 }]; }
   freqSm = Math.exp(Math.log(freqSm) + (Math.log(Math.max(20,target)) - Math.log(freqSm)) * 0.12);
   levelSm += (tgtLevel - levelSm) * 0.15;
   const lit = live || (seqNodes.length > 0 && visSm > 0.5);           // stay lit through the short gaps between words
@@ -626,6 +714,8 @@ function frame(t){
   const a = Math.sqrt(freqSm/12);
   gl.uniform2f(uR, cv.width, cv.height); gl.uniform1f(uT, reduce ? 0 : t/1000);
   gl.uniform1f(uA, a); gl.uniform1f(uL, levelSm); gl.uniform1f(uM, mediumSm); gl.uniform3fv(uC, colSm);
+  plateInfo = plateModel(); psSm += (plateInfo.strength - psSm) * 0.15;
+  gl.uniform4fv(uPM, pm); gl.uniform1f(uPN, plateInfo.meanE); gl.uniform1f(uPS, psSm); gl.uniform1f(uPHY, physics ? 1 : 0);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
   if (rec) { compose(); }
   if (t - lastHud > 90) {
@@ -636,7 +726,9 @@ function frame(t){
     $("nmOut").textContent = Math.round(L.nm) + " nm"; $("octOut").textContent = L.oct;
     $("sw").style.color = `rgb(${rgb.map(x=>x*255|0)})`;
     const fold = Math.floor(3 + (a*1.3)%9);
-    $("modeOut").textContent = medium === 2 ? `${fold*2} filaments` : medium ? `${fold}-fold` : `${a.toFixed(1)} · ${(a*0.62+1).toFixed(1)}`;
+    const b = plateInfo.best;
+    $("modeOut").textContent = medium === 2 ? `${fold*2} filaments` : medium ? `${fold}-fold`
+      : physics && b ? `mode (${b.n},${b.m})${b.sg > 0 ? "+" : "−"} ${Math.round(b.f)} Hz · ${Math.round(psSm*100)}% resonant` : `${a.toFixed(1)} · ${(a*0.62+1).toFixed(1)}`;
   }
   requestAnimationFrame(frame);
 }
@@ -672,7 +764,7 @@ function compose() {
   const L = soundToLight(freqSm), rgb = colSm.map(x => x * 255 | 0);
   cx.font = `400 ${u * 2.6}px "JetBrains Mono", ui-monospace, monospace`;
   cx.fillStyle = negative || colour === "rain" || colour === "white" ? ink : `rgb(${rgb})`;
-  cx.fillText(`${freqSm.toFixed(1)} Hz · ${noteName(freqSm)} · ${Math.round(L.nm)} nm · ${MEDIUM_NAMES[medium]}`, pad, H - pad);
+  cx.fillText(`${freqSm.toFixed(1)} Hz · ${noteName(freqSm)} · ${Math.round(L.nm)} nm · ${medium === 0 && physics ? "brass plate" : MEDIUM_NAMES[medium]}`, pad, H - pad);
 }
 const slug = () => (label || "cymatic").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "cymatic";
 const stamp = () => { const d = new Date(), p = n => String(n).padStart(2, "0"); return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`; };

@@ -79,7 +79,7 @@ footer { color: var(--dim); font-size: 13px; border-top: 1px solid var(--line); 
     <h2>How it works</h2>
     <ol class="steps">
       <li><p><strong>Listen.</strong> The browser's audio engine plays the sound and measures its strongest pitch and its loudness about sixty times a second.</p></li>
-      <li><p><strong>Vibrate.</strong> A square plate vibrating at a pitch has lines that stay still while the rest moves. Sand gathers on those lines. Higher pitches give more, finer lines. The app solves the plate's standing-wave pattern for the current pitch and draws the still lines as light.</p></li>
+      <li><p><strong>Vibrate.</strong> With real plate physics on, the app models an ideal brass plate, 30 cm square and 1 mm thick. Its vibration modes ring at f = 18.1 Hz × (n² + m²), from thin-plate theory. Every pitch in the sound, overtones included, drives those modes through their resonance curves, and sand gathers where the plate moves least. Near a resonance the lines are sharp and bright. Between resonances they stay faint, as on a real plate.</p></li>
       <li><p><strong>Colour.</strong> The pitch is doubled, octave by octave, until it reaches the frequency of visible light. That light's wavelength sets the colour, so a given note always glows the same colour.</p></li>
     </ol>
     <div class="formula">A4 = 440 Hz × 2⁴⁰ ≈ 484 THz ≈ 620 nm (orange-red)</div>
@@ -88,6 +88,8 @@ footer { color: var(--dim); font-size: 13px; border-top: 1px solid var(--line); 
   <section>
     <h2>Good to know</h2>
     <ul>
+      <li>How true is it? The plate pattern comes from a physical model of an ideal plate, not a camera, so a real plate of a different size or metal would ring at other pitches. Water and plasma are artistic. The colour mapping is exact arithmetic but a convention: sound and light are different kinds of waves.</li>
+      <li>In Exact tuning every word gets its own tone from a fingerprint of its letters, so “listen” and “silent” sound and look different.</li>
       <li>Everything runs in your browser. Songs, your voice and your captures never leave your device.</li>
       <li>Sound starts only after you press a button. That's a browser rule.</li>
       <li>Recording works best in Chrome, Edge or Safari. You'll get an MP4 or a WebM depending on the browser.</li>
