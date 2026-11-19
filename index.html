@@ -192,6 +192,8 @@ button:disabled { opacity: .45; cursor: default; }
       <div class="swatches" id="swatches" role="group" aria-label="Light colour"></div>
       <div class="swname" id="swName" aria-live="polite"><b>From the pitch</b> · each note glows its own colour</div>
       <label class="check"><input type="checkbox" id="negative"> Negative (invert: dark lines on a light plate)</label>
+      <label class="small" for="bright">Light intensity <span id="brightOut">100%</span></label>
+      <input type="range" id="bright" min="50" max="400" step="10" value="100">
       <label class="small" for="vol">Volume <span id="volOut">60%</span></label>
       <input type="range" id="vol" min="0" max="100" value="60">
     </section>
@@ -619,7 +621,8 @@ const FS = `
 precision highp float;
 uniform vec2 R; uniform float T, A, L, M, NEG, RAIN, VIS; uniform vec3 C;
 uniform vec4 PM[24]; uniform float PN, PS, PHY;
-uniform float G;   // formation: 0 = unformed liquid shimmer, 1 = the pattern has fully settled   // real plate: modes (n, m, re, im) per overtone, mean energy, resonance, on/off
+uniform float G;
+uniform float BRI;   // light intensity chosen by the viewer (1 = normal)   // formation: 0 = unformed liquid shimmer, 1 = the pattern has fully settled   // real plate: modes (n, m, re, im) per overtone, mean energy, resonance, on/off
 #define PI 3.14159265
 float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float vnoise(vec2 p){
@@ -712,6 +715,7 @@ void main(){
   col += base*frame*0.25;
   float vig = 1.0 - 0.15*dot(uv,uv)/4.0;
   col *= vig;
+  col *= BRI;
   col = col/(1.0+col*0.35);          // soft tone-map so bright peaks bloom, not clip
   vec3 o = clamp(pow(col, vec3(0.92)), 0.0, 1.0);
   gl_FragColor = vec4(mix(o, 1.0 - o, NEG) * VIS, 1.0);   // NEG = 1: photographic negative; VIS = 0: black until sound plays
@@ -723,8 +727,18 @@ gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,3,-1,-1,3]), gl.STATIC_DR
 const loc = gl.getAttribLocation(pr, "p"); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
 const U = n => gl.getUniformLocation(pr, n);
 const uR=U("R"), uT=U("T"), uA=U("A"), uL=U("L"), uM=U("M"), uC=U("C"), uN=U("NEG"), uW=U("RAIN"), uV=U("VIS");
+const uBRI=U("BRI");
+let bright = 1;
+try { const b = +localStorage.getItem("cym-bright"); if (b >= 50 && b <= 400) { $("bright").value = b; } } catch (e) {}
+function setBright() { bright = +$("bright").value / 100; $("brightOut").textContent = $("bright").value + "%"; }
+$("bright").addEventListener("input", () => { setBright(); try { localStorage.setItem("cym-bright", $("bright").value); } catch (e) {} });
+setBright();
 const uPM=U("PM[0]"), uPN=U("PN"), uPS=U("PS"), uPHY=U("PHY"), uG=U("G");
-let formSm = 0, formFrom = 440, lastJump = 0;
+let formSm = 0, lastJump = 0;
+// The pitch that shapes the figure. Every figure is laid out around the middle of the plate, so if
+// this glided from note to note the lines would visibly zoom in toward the centre (or out from it).
+// Instead it jumps to a new note while the old figure dissolves, and the new one forms in place.
+let patternHz = 440, candHz = 440, candT = 0;
 let physics = true, psSm = 0, plateInfo = { best: null, strength: 0 };
 try { physics = localStorage.getItem("cym-physics") !== "0"; } catch (e) {}
 $("physics").checked = physics; $("physNote").hidden = !physics;
@@ -795,8 +809,17 @@ function frame(t){
   // formation: grows while a steady sound plays; a new pitch partly dissolves the figure, which
   // then re-forms; silence lets it melt back so the next sound starts from loose liquid
   if (lit) {
-    if (Math.abs(Math.log(target / formFrom)) > 0.03 && t - lastJump > 200) { formSm *= 0.55; lastJump = t; }
-    formFrom = target;
+    // tones and words the app plays are exact, so a new one takes effect at once; songs and the mic
+    // are estimated, so a new note must hold for 150 ms before the figure changes
+    const exact = !!toneOsc || !!seqHz;
+    if (Math.abs(Math.log(target / candHz)) > 0.03) { candHz = target; candT = t; }
+    if (Math.abs(Math.log(target / patternHz)) > 0.03) {
+      if (exact || t - candT > 150) {
+        patternHz = target;                                 // a new note: start a new figure
+        if (t - lastJump > 120) formSm *= exact ? 0.2 : 0.45;
+        lastJump = t;
+      }
+    } else patternHz = Math.exp(Math.log(patternHz) + (Math.log(target) - Math.log(patternHz)) * 0.05);   // vibrato: follow gently
     formSm += (1 - formSm) * (0.018 + 0.02 * levelSm);   // about 1.5–2 s to settle
   } else formSm *= 0.97;
   gl.uniform1f(uG, reduce ? (lit ? 1 : 0) : formSm);
@@ -805,11 +828,11 @@ function frame(t){
   const want = chosenRGB(rgb);
   colSm = colSm.map((c,i) => c + (want[i]-c)*0.1);
   negSm += ((negative ? 1 : 0) - negSm) * 0.12;
-  gl.uniform1f(uV, visSm);
+  gl.uniform1f(uV, visSm); gl.uniform1f(uBRI, bright);
   hud.classList.toggle("quiet", visSm < 0.05);
   if (visSm > 0.05 && !waitingGone) { waitingGone = true; $("waiting").classList.add("gone"); }
   gl.uniform1f(uN, negSm); gl.uniform1f(uW, colour === "rain" ? 1 : 0);
-  const a = Math.sqrt(freqSm/12);
+  const a = Math.sqrt(patternHz/12);   // when the sound stops the figure melts where it is, without moving
   gl.uniform2f(uR, cv.width, cv.height); gl.uniform1f(uT, reduce ? 0 : t/1000);
   gl.uniform1f(uA, a); gl.uniform1f(uL, levelSm); gl.uniform1f(uM, mediumSm); gl.uniform3fv(uC, colSm);
   plateInfo = plateModel(); psSm += (plateInfo.strength - psSm) * 0.15;
