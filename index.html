@@ -162,6 +162,7 @@ button:disabled { opacity: .45; cursor: default; }
         <button id="recSongBtn" disabled>Record song</button>
       </div>
       <label class="check"><input type="checkbox" id="caption" checked> Show the word or song title on captures</label>
+      <label class="check"><input type="checkbox" id="autoSnap"> Save an image automatically when each word's tone finishes</label>
       <div class="row"><button id="resaveBtn" hidden>Save last recording again</button></div>
       <p class="note" id="capNote">Save image keeps the current pattern with your word on it. Record song plays the current song from the start and stops when it ends, sound included.</p>
     </section>
@@ -327,6 +328,9 @@ $("playWords").onclick = () => {
       if (u.hz) { target = u.hz; if (single) label = u.text; }
     }, (t - ac.currentTime)*1000));
     if (!u.hz) return;
+    // auto-capture: just before the tone fades, once the pattern has settled on it
+    if (single && $("autoSnap").checked)
+      seqTimers.push(setTimeout(() => { label = u.text; snapStill(true); }, (t + dur*0.88 - ac.currentTime)*1000));
     // letters: plucked; a word or phrase: one held tone with a soft swell so the pattern settles
     const atk = single ? Math.min(0.08, dur*0.2) : 0.015;
     [[1,"triangle",0.32],[2,"sine",0.08]].forEach(([mult,type,amp]) => {
@@ -338,6 +342,9 @@ $("playWords").onclick = () => {
       o.connect(g).connect(master); o.start(t); o.stop(t+dur+0.4); seqNodes.push(o);
     });
   });
+  // letter-by-letter melody: one image when the last letter is ending
+  if (!single && $("autoSnap").checked && beatAt > 0)
+    seqTimers.push(setTimeout(() => { label = text.trim(); snapStill(true); }, (t0 + (beatAt - 0.15)*beat - ac.currentTime)*1000));
   seqTimers.push(setTimeout(() => {
     [...spans].forEach(s => s.classList.remove("live")); seqNodes = []; label = text.trim();
   }, (t0 - ac.currentTime + beatAt*beat)*1000 + 300));
@@ -659,10 +666,27 @@ async function saveFile(name, blob) {
   return true;
 }
 
-$("snapBtn").onclick = () => {
+// Stills are drawn on their own canvas (so a running recording can't disturb them) and saved one
+// at a time: in the claude.ai viewer each save asks first, and only one question can be open.
+const still = document.createElement("canvas"), sx = still.getContext("2d");
+let saveQueue = Promise.resolve(), snapCount = 0;
+function snapStill(auto) {
   sizeComp(); compose();
-  comp.toBlob(b => { if (b) saveFile(`${slug()}-${stamp()}.png`, b); else capNote("The image couldn't be made. Try again."); }, "image/png");
+  still.width = comp.width; still.height = comp.height; sx.drawImage(comp, 0, 0);
+  const name = `${slug()}-${stamp()}-${String(++snapCount).padStart(2, "0")}.png`;
+  still.toBlob(b => {
+    if (!b) { capNote("The image couldn't be made. Try again."); return; }
+    saveQueue = saveQueue.then(() => saveFile(name, b)).catch(() => {});
+  }, "image/png");
+  if (auto) capNote(`Captured “${label}”.`);
+}
+$("snapBtn").onclick = () => snapStill(false);
+$("autoSnap").onchange = e => {
+  capNote(e.target.checked ? "Auto-capture is on. Each word saves an image as its tone finishes (letter-by-letter saves one at the end)."
+    : "Auto-capture is off.");
+  try { localStorage.setItem("cym-autosnap", e.target.checked ? "1" : ""); } catch (err) {}
 };
+try { $("autoSnap").checked = localStorage.getItem("cym-autosnap") === "1"; } catch (e) {}
 
 let rec = null, recChunks = [], recStart = 0, lastRec = null;
 function pickMime() {

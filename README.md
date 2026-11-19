@@ -13,7 +13,7 @@ A browser app that turns words, tones, songs and your voice into glowing cymatic
 - Live microphone input.
 - Two looks: sand on a vibrating plate (Chladni patterns) and water in a dish.
 - Colour from the sound's pitch raised by whole octaves into visible light, or pick any spectrum colour, rainbow, white on black, or a black-on-white negative.
-- Save still images and record video with sound.
+- Save still images (or have one saved automatically as each word's tone finishes) and record video with sound.
 
 ## Files
 
