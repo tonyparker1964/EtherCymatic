@@ -148,8 +148,10 @@ button:disabled { opacity: .45; cursor: default; }
         <select id="wave" aria-label="Waveform">
           <option value="sine">Sine</option><option value="triangle">Triangle</option>
           <option value="square">Square</option><option value="sawtooth">Saw</option>
+          <option value="phi">Golden-ratio cascade (Dan Winter)</option>
         </select>
       </div>
+      <p class="note" id="phiNote" hidden>Dan Winter's idea: tones spaced by the golden ratio φ ≈ 1.618 interfere so that their sums and differences land on other tones of the same series (f·φⁿ + f·φⁿ⁺¹ = f·φⁿ⁺²), a cascade he calls constructive or "implosive". The arithmetic is exact and you can see and hear the cascade here. His further claims, about charge implosion, gravity and consciousness, are his own hypotheses and are not established physics.</p>
     </section>
 
     <section>
@@ -190,10 +192,12 @@ button:disabled { opacity: .45; cursor: default; }
       <div class="seg">
         <button id="mPlate" class="on">Sand</button>
         <button id="mWater">Water</button>
-        <button id="mPlasma">Plasma</button>
+        <button id="mPlasma">Light</button>
       </div>
       <label class="check"><input type="checkbox" id="physics" checked> Real plate physics (sand)</label>
-      <p class="note" id="physNote">An ideal 30 cm × 1 mm brass plate covered in real grains. The grains bounce where the plate moves and come to rest on the still lines. Near a resonant pitch they gather fast; between resonances the plate barely moves and the sand drifts slowly, as on a real plate. Untick for the classic idealised plate.</p>
+      <label class="check"><input type="checkbox" id="slowmo"> Slow motion (watch the water surface move)</label>
+      <p class="note" id="mechNote">Each look is a physics simulation. Sand: grains only move where the plate's shaking beats gravity. Water: a shaken surface becomes unstable and grows ripples at half the pitch. Light: bubbles crushed by the sound heat up enough to glow (sonoluminescence).</p>
+      <p class="note" id="physNote">An ideal 30 cm × 1 mm brass plate. Near a resonant pitch it shakes hard and the sand gathers fast; between resonances it barely moves and the sand may not stir at all, as on a real plate. Untick for the classic idealised plate, which always responds.</p>
       <h2 style="margin-top:8px">Colour</h2>
       <div class="swatches" id="swatches" role="group" aria-label="Light colour"></div>
       <div class="swname" id="swName" aria-live="polite"><b>From the pitch</b> · each note glows its own colour</div>
@@ -256,9 +260,22 @@ function audio() {
 // pure tone
 let toneHz = 440;
 $("freq").value = hzToSlider(440);
+// Golden-ratio cascade (Dan Winter): the tone plus partners at f·φ⁻¹, f·φ, f·φ², f·φ³, each softer by 1/φ
+const PHI = (1 + Math.sqrt(5)) / 2, PHI_N = [-1, 1, 2, 3];
+let phiOscs = [];
+function syncPhi() {
+  phiOscs.forEach(({ o }) => { try { o.stop(); } catch (e) {} }); phiOscs = [];
+  if (!toneOsc || $("wave").value !== "phi") return;
+  PHI_N.forEach(nn => {
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = "sine"; o.frequency.value = toneHz * Math.pow(PHI, nn); g.gain.value = Math.pow(PHI, -Math.abs(nn));
+    o.connect(g).connect(toneGain); o.start(); phiOscs.push({ o, nn });
+  });
+}
 function setTone(f) {
   toneHz = f; $("freq").value = hzToSlider(f); $("freqOut").textContent = f.toFixed(f<100?1:0) + " Hz";
   if (toneOsc) toneOsc.frequency.setTargetAtTime(f, ac.currentTime, 0.03);
+  phiOscs.forEach(({ o, nn }) => o.frequency.setTargetAtTime(f * Math.pow(PHI, nn), ac.currentTime, 0.03));
   if (!anySound()) target = f;
 }
 $("freq").addEventListener("input", e => setTone(sliderToHz(+e.target.value)));
@@ -269,17 +286,22 @@ $("freq").addEventListener("input", e => setTone(sliderToHz(+e.target.value)));
 $("toneBtn").onclick = () => {
   audio();
   if (toneOsc) { stopTone(); return; }
-  toneOsc = ac.createOscillator(); toneOsc.type = $("wave").value; toneOsc.frequency.value = toneHz;
+  toneOsc = ac.createOscillator(); toneOsc.type = $("wave").value === "phi" ? "sine" : $("wave").value; toneOsc.frequency.value = toneHz;
   toneGain = ac.createGain(); toneGain.gain.value = 0;
   toneOsc.connect(toneGain).connect(master); toneOsc.start();
   toneGain.gain.setTargetAtTime(0.35, ac.currentTime, 0.05);
+  syncPhi();
   label = "";
   $("toneBtn").textContent = "Stop tone"; $("toneBtn").classList.add("on");
 };
-$("wave").onchange = e => { if (toneOsc) toneOsc.type = e.target.value; };
+$("wave").onchange = e => {
+  $("phiNote").hidden = e.target.value !== "phi";
+  if (toneOsc) { toneOsc.type = e.target.value === "phi" ? "sine" : e.target.value; syncPhi(); }
+};
 function stopTone() {
   if (!toneOsc) return;
   const o = toneOsc, g = toneGain; g.gain.setTargetAtTime(0, ac.currentTime, 0.05); o.stop(ac.currentTime+0.3);
+  phiOscs.forEach(({ o }) => { try { o.stop(ac.currentTime + 0.3); } catch (e) {} }); phiOscs = [];
   toneOsc = null; $("toneBtn").textContent = "Start tone"; $("toneBtn").classList.remove("on");
 }
 
@@ -487,7 +509,7 @@ $("vol").addEventListener("input", e => { $("volOut").textContent = e.target.val
 
 // medium
 let medium = 0;
-const MEDIA = ["mPlate", "mWater", "mPlasma"], MEDIUM_NAMES = ["sand plate", "water", "plasma"];
+const MEDIA = ["mPlate", "mWater", "mPlasma"], MEDIUM_NAMES = ["sand plate", "water", "light from sound"];
 MEDIA.forEach((id, i) => $(id).onclick = () => { medium = i; MEDIA.forEach((m, j) => $(m).classList.toggle("on", j === i)); });
 
 // live microphone
@@ -628,89 +650,14 @@ const VS = "attribute vec2 p;void main(){gl_Position=vec4(p,0,1);}";
 const FS = `
 precision highp float;
 uniform vec2 R; uniform float T, A, L, M, NEG, RAIN, VIS; uniform vec3 C;
-uniform float G;     // formation: 0 = the surface is still calm, 1 = the pattern has fully built up
-uniform float BRI;   // light intensity chosen by the viewer (1 = normal)
-uniform float STR;   // pattern strength (1 = natural)
-uniform float SS;    // supersampling: 2 = four samples per pixel
-uniform vec4 SP[4];  // water: per spectral peak (wavenumber, lattice directions 2 or 3, share, seed)
-uniform vec4 ZP;     // plasma: (lattice wavenumber, second lattice wavenumber, second share, seed)
+uniform float G, BRI, STR, SS;
+uniform sampler2D PLT;   // plate: R = signed shape of the vibration (0.5 = still), G = local acceleration / g ÷ 12
+uniform sampler2D WAT;   // water: R = surface height from the simulation (0.5 = flat)
+uniform float PH;        // the plate's flex at this moment, shown in slow motion (−1..1)
+uniform float WN;        // water grid size
+uniform float SLOW;      // 1 when water is shown in slow motion
 #define PI 3.14159265
 float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-float vnoise(vec2 p){
-  vec2 i = floor(p), f = fract(p); f = f*f*(3.0 - 2.0*f);
-  return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
-}
-float fbm(vec2 p){ float v = 0.0, a = 0.5; for (int i = 0; i < 4; i++) { v += a*vnoise(p); p = p*2.03 + 1.7; a *= 0.5; } return v; }
-
-// ---- WATER: a Faraday-wave surface photographed under a ring light (the CymaScope set-up) ----
-// The surface height is a standing-wave lattice at the ripple wavelength: squares in the capillary
-// regime, hexagons at low drive pitches (as measured in Faraday experiments). Slow, large-scale
-// bending of the lattice gives the dislocations and grain boundaries seen in real dishes, and the
-// dish wall sends its own ripples inward. The image is the ring light's reflection: a patch of
-// surface lights up when its tilt reflects the ring into the camera, so each crest shows a glint.
-float height(vec2 p){
-  float h = 0.0;
-  for (int j = 0; j < 4; j++) {
-    vec4 c = SP[j];
-    if (c.z <= 0.0) continue;
-    float k = c.x;
-    vec2 warp = (vec2(fbm(p*0.55 + c.w*17.0 + T*0.02), fbm(p*0.55 + c.w*29.0 + 3.1 - T*0.017)) - 0.5) * (9.0 / k);
-    vec2 q = p + warp;
-    float rot = c.w * PI;
-    float s = 0.0;
-    for (int d = 0; d < 3; d++) {
-      if (float(d) >= c.y) break;
-      float ang = rot + PI * float(d) / c.y;
-      s += cos(k * dot(q, vec2(cos(ang), sin(ang))));
-    }
-    h += c.z * s / c.y;
-  }
-  float r = length(p);   // meniscus ripples from the dish wall, fading toward the middle
-  h += 0.35 * cos(SP[0].x * (1.0 - r) * 1.0) * exp(-(1.0 - r) * SP[0].x * 0.09);
-  return h;
-}
-vec3 water(vec2 p, vec3 base){
-  float eps = 0.6 / SP[0].x;
-  float h0 = height(p), hx = height(p + vec2(eps, 0.0)), hy = height(p + vec2(0.0, eps));
-  float amp = (0.06 + 0.10*L) * G * (0.7 + 0.3*STR) * (0.8 + 0.2*cos(T*1.3));   // waves build up with G
-  vec2 grad = vec2(hx - h0, hy - h0) / eps * amp / SP[0].x * 9.0;
-  float tilt = length(grad);
-  float ring = exp(-pow((tilt - 0.17) / (0.035 + 0.02*STR), 2.0));       // reflection of the ring light
-  float sheen = exp(-tilt*tilt*120.0) * 0.06;                              // flat water: a faint grey sheen
-  float spark = pow(ring, 6.0);
-  return base * (ring * 1.5 + sheen) + vec3(1.0) * spark * 0.6;
-}
-
-// ---- PLASMA: self-organised filaments in a dielectric-barrier discharge ----
-// Seen through the electrode, the micro-discharges arrange themselves into a hexagonal lattice of
-// bright spots with a faint honeycomb glow between them; the lattice drifts and has defects, spots
-// flicker and ignite one by one. A strong overtone adds a second, rotated lattice (a superlattice).
-vec3 hexSpot(vec2 p, float k, float seed){
-  float s = 2.0 * PI / k;                       // spot spacing
-  vec2 r = vec2(1.0, 1.7320508) * s;
-  vec2 a = mod(p, r) - r*0.5, b = mod(p - r*0.5, r) - r*0.5;
-  vec2 g = dot(a, a) < dot(b, b) ? a : b;
-  vec2 id = floor((p - g) / s * 1.01 + 0.5);
-  float d = length(g) / s;
-  return vec3(d, hash(id + seed*13.0), hash(id + seed*7.0 + floor(T*18.0)));
-}
-vec3 plasma(vec2 p, vec3 base){
-  vec2 q = p + (vec2(fbm(p*0.8 + T*0.05), fbm(p*0.8 + 5.0 - T*0.04)) - 0.5) * 0.35;
-  vec3 h1 = hexSpot(q, ZP.x, ZP.w);
-  float on = step(h1.y, G * 1.15) * step(h1.y, 0.95);                // ignite one by one; a few stay dark
-  float rad = 0.11 * (0.7 + 0.3*STR);
-  float spot = exp(-pow(h1.x / rad, 2.0)) * on * (0.55 + 0.45*h1.z);
-  float honey = smoothstep(0.30, 0.5, h1.x) * 0.10 * G;                 // Townsend glow between the filaments
-  float spot2 = 0.0;
-  if (ZP.z > 0.12) {
-    vec2 q2 = vec2(q.x*0.866 - q.y*0.5, q.x*0.5 + q.y*0.866);
-    vec3 h2 = hexSpot(q2, ZP.y, ZP.w + 3.0);
-    spot2 = exp(-pow(h2.x / (rad*0.8), 2.0)) * ZP.z * step(h2.y, G) * (0.5 + 0.5*h2.z);
-  }
-  float s = spot + spot2;
-  return base * (s * 1.6 + honey) + vec3(1.0) * pow(s, 3.0) * 0.7;
-}
-
 vec3 render(vec2 fc){
   vec2 uv = (fc - 0.5*R) / min(R.x, R.y) * 2.15;
   float wP = clamp(1.0 - M, 0.0, 1.0), wW = clamp(1.0 - abs(M - 1.0), 0.0, 1.0), wZ = clamp(M - 1.0, 0.0, 1.0);
@@ -723,15 +670,32 @@ vec3 render(vec2 fc){
     float h = fract(atan(uv.y, uv.x)/(2.0*PI) + length(uv)*0.22 - T*0.03);
     base = clamp(abs(mod(h*6.0 + vec3(0.0,4.0,2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
   }
-  float e = 0.35 + 0.8*L;
   vec3 col = vec3(0.0);
-  // the sand plate itself: dark brushed metal; the sand is drawn on top as real grains
-  if (wP > 0.001) col += (0.03 + 0.02*fbm(uv*vec2(60.0, 1.5))) * (0.5 + 0.5*base) * wP;
-  if (wW > 0.001 && length(uv) < 1.0) col += water(uv, base) * wW * e;
-  if (wZ > 0.001 && length(uv) < 1.0) col += plasma(uv, base) * wZ * e;
+  vec2 q = uv*0.5 + 0.5;
+  // PLATE: the metal flexing up and down (shown slowed down), lit from one side so the bending reads
+  if (wP > 0.001) {
+    float d = 1.0/128.0;
+    float s0 = texture2D(PLT, q).r*2.0 - 1.0;
+    float sx = texture2D(PLT, q + vec2(d, 0.0)).r*2.0 - 1.0, sy = texture2D(PLT, q + vec2(0.0, d)).r*2.0 - 1.0;
+    vec2 g = vec2(sx - s0, sy - s0) * 128.0 * PH * 0.012 * (0.5 + L);
+    float shade = clamp(0.5 + dot(g, vec2(0.6, 0.8)), 0.0, 1.0);
+    float metal = 0.025 + 0.012*hash(floor(vec2(q.x*400.0, q.y*6.0)));
+    col += (vec3(metal) + base*0.10*shade*shade) * wP;
+  }
+  // WATER: the simulated surface, lit from above-left: crests catch the light, troughs fall dark
+  if (wW > 0.001 && length(uv) < 1.0) {
+    float d = 1.0/WN;
+    float h0 = texture2D(WAT, q).r*2.0 - 1.0;
+    float hx = texture2D(WAT, q + vec2(d, 0.0)).r*2.0 - 1.0, hy = texture2D(WAT, q + vec2(0.0, d)).r*2.0 - 1.0;
+    vec3 n = normalize(vec3(-(hx - h0)*3.0*(0.6 + 0.4*STR), -(hy - h0)*3.0*(0.6 + 0.4*STR), 1.0));
+    float diff = clamp(dot(n, normalize(vec3(-0.45, 0.55, 1.0))), 0.0, 1.0);
+    float spec = pow(clamp(dot(reflect(vec3(0.0, 0.0, -1.0), n), normalize(vec3(-0.35, 0.45, 1.0))), 0.0, 1.0), 60.0);
+    col += (base*(0.04 + 0.55*pow(diff, 5.0) + 0.25*max(h0, 0.0)) + vec3(1.0)*spec*0.55) * wW;
+  }
+  // LIGHT: dark water; the collapsing bubbles are drawn on top as points of light
+  if (wZ > 0.001 && length(uv) < 1.0) col += vec3(0.008, 0.01, 0.016) * wZ;
   col *= mask;
   col += base*frame*0.25;
-  col *= 1.0 - 0.15*dot(uv,uv)/4.0;
   col *= BRI;
   col = col/(1.0+col*0.35);
   vec3 o = clamp(pow(col, vec3(0.92)), 0.0, 1.0);
@@ -749,40 +713,67 @@ const pr = gl.createProgram(); gl.attachShader(pr, sh(gl.VERTEX_SHADER, VS)); gl
 gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
 gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,3,-1,-1,3]), gl.STATIC_DRAW);
 const loc = gl.getAttribLocation(pr, "p"); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+// =====================================================================================
+// MECHANICS. Each look is a small physics simulation driven by the sound, not a drawing.
+// =====================================================================================
+const G_ACC = 9.81;
 const quadBuf = gl.getParameter(gl.ARRAY_BUFFER_BINDING);
+gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+function makeTex(unit) {
+  const t = gl.createTexture(); gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return t;
+}
+const plateTex = makeTex(0), waterTex = makeTex(1);
+gl.uniform1i(gl.getUniformLocation(pr, "PLT"), 0); gl.uniform1i(gl.getUniformLocation(pr, "WAT"), 1);
+const uPH = gl.getUniformLocation(pr, "PH"), uWN = gl.getUniformLocation(pr, "WN"), uSLOW = gl.getUniformLocation(pr, "SLOW");
 
-// ---------- SAND: real grains ----------
-// Tens of thousands of grains sit on the plate. Each frame every grain is bounced by the plate
-// under it: where the plate moves a lot the grain jumps a random distance in proportion, and it
-// slides slightly downhill toward stiller places. Where the plate barely moves, grains come to
-// rest, so they pile up along the still (nodal) lines, unevenly and with stragglers, the way real
-// sand does. Grains that bounce off the edge fall away and fresh sand is sprinkled back on.
-const GVS = `attribute vec2 gp; attribute float gb; uniform vec2 R; uniform float PSZ, RAIN, T; uniform vec3 GC;
-varying float vb; varying vec3 vc;
-void main(){
-  vec2 uv = gp*2.0 - 1.0;
-  gl_Position = vec4(uv * 2.0*min(R.x, R.y)/(2.15*R), 0.0, 1.0);
-  gl_PointSize = PSZ * (0.75 + 0.45*gb);
-  vb = gb; vc = GC;
-  if (RAIN > 0.5) { float h = fract(atan(uv.y, uv.x)/6.2831853 + length(uv)*0.22 - T*0.03);
-    vc = clamp(abs(mod(h*6.0 + vec3(0.0,4.0,2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0); }
-}`;
-const GFS = `precision mediump float; varying float vb; varying vec3 vc; uniform float GI;
-void main(){ vec2 d = gl_PointCoord - 0.5; float a = exp(-dot(d, d)*14.0); gl_FragColor = vec4(vc * a * vb * GI, 1.0); }`;
-const gpr = gl.createProgram(); gl.attachShader(gpr, sh(gl.VERTEX_SHADER, GVS)); gl.attachShader(gpr, sh(gl.FRAGMENT_SHADER, GFS)); gl.linkProgram(gpr);
-const gLocP = gl.getAttribLocation(gpr, "gp"), gLocB = gl.getAttribLocation(gpr, "gb");
-const gU = n => gl.getUniformLocation(gpr, n);
-const guR = gU("R"), guPSZ = gU("PSZ"), guRAIN = gU("RAIN"), guT = gU("T"), guGC = gU("GC"), guGI = gU("GI");
-const posBuf = gl.createBuffer(), briBuf = gl.createBuffer();
+// A shared point-sprite program for grains and bubbles: position, size, colour per point.
+const PVS = `attribute vec2 pp; attribute float ps; attribute vec3 pc; uniform vec2 R;
+varying vec3 vc;
+void main(){ gl_Position = vec4((pp*2.0 - 1.0) * 2.0*min(R.x, R.y)/(2.15*R), 0.0, 1.0); gl_PointSize = ps; vc = pc; }`;
+const PFS = `precision mediump float; varying vec3 vc; uniform float PI_;
+void main(){ vec2 d = gl_PointCoord - 0.5; float r2 = dot(d, d); float a = exp(-r2*PI_) * (1.0 - smoothstep(0.2, 0.25, r2)); gl_FragColor = vec4(vc * a, 1.0); }`;
+const ppr = gl.createProgram(); gl.attachShader(ppr, sh(gl.VERTEX_SHADER, PVS)); gl.attachShader(ppr, sh(gl.FRAGMENT_SHADER, PFS)); gl.linkProgram(ppr);
+const pLocP = gl.getAttribLocation(ppr, "pp"), pLocS = gl.getAttribLocation(ppr, "ps"), pLocC = gl.getAttribLocation(ppr, "pc");
+const puR = gl.getUniformLocation(ppr, "R"), puF = gl.getUniformLocation(ppr, "PI_");
+const ptBuf = gl.createBuffer();
+function drawPoints(data, count, w, h, falloff) {
+  if (!count) return;
+  gl.useProgram(ppr);
+  gl.bindBuffer(gl.ARRAY_BUFFER, ptBuf); gl.bufferData(gl.ARRAY_BUFFER, data.subarray(0, count*6), gl.STREAM_DRAW);
+  gl.enableVertexAttribArray(pLocP); gl.vertexAttribPointer(pLocP, 2, gl.FLOAT, false, 24, 0);
+  gl.enableVertexAttribArray(pLocS); gl.vertexAttribPointer(pLocS, 1, gl.FLOAT, false, 24, 8);
+  gl.enableVertexAttribArray(pLocC); gl.vertexAttribPointer(pLocC, 3, gl.FLOAT, false, 24, 12);
+  gl.uniform2f(puR, w, h); gl.uniform1f(puF, falloff);
+  gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
+  gl.blendEquation(negative ? gl.FUNC_REVERSE_SUBTRACT : gl.FUNC_ADD);
+  gl.drawArrays(gl.POINTS, 0, count);
+  gl.disable(gl.BLEND); gl.blendEquation(gl.FUNC_ADD);
+  gl.disableVertexAttribArray(pLocS); gl.disableVertexAttribArray(pLocC);
+  gl.useProgram(pr); gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+  gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+}
 
-const GRID = 128, ampGrid = new Float32Array(GRID*GRID), gxGrid = new Float32Array(GRID*GRID), gyGrid = new Float32Array(GRID*GRID);
+// ---------- 1. THE PLATE ----------
+// The sound drives the plate's vibration modes (see plateModel). From the mode shapes we get, at
+// every point, how far the plate moves (A) and so its vertical acceleration A·ω². A grain only
+// leaves the surface when that acceleration beats gravity: Γ = A·ω²/g > 1. Where Γ < 1 friction
+// holds it still. Where Γ > 1 it is thrown up and lands a short, random distance away; its hop is
+// longer where the plate moves more and, for the same Γ, longer at low pitch (A = Γg/ω²). Grains
+// therefore random-walk quickly in the moving zones and stop in the still ones, which is how the
+// figure forms (a space-dependent diffusion of bouncing grains). Time is sped up so it forms in
+// seconds rather than minutes.
+const GRID = 128, ampGrid = new Float32Array(GRID*GRID), shapeGrid = new Float32Array(GRID*GRID);
+const gxGrid = new Float32Array(GRID*GRID), gyGrid = new Float32Array(GRID*GRID), plateBytes = new Uint8Array(GRID*GRID);
 const COS = []; for (let n = 0; n <= 18; n++) { const a = new Float32Array(GRID); for (let i = 0; i < GRID; i++) a[i] = Math.cos(Math.PI*n*i/(GRID-1)); COS.push(a); }
-let gridKey = "", gridAt = 0;
+let gridKey = "", gridAt = 0, gammaMax = 0;
 function buildGrid() {
-  let max = 1e-12;
-  if (physics) {
-    for (let yi = 0; yi < GRID; yi++) for (let xi = 0; xi < GRID; xi++) {
-      let E = 0;
+  let max = 1e-12, smax = 1e-12;
+  for (let yi = 0; yi < GRID; yi++) for (let xi = 0; xi < GRID; xi++) {
+    let E = 0, s = 0;
+    if (physics) {
       for (let j = 0; j < 6; j++) {
         let re = 0, im = 0;
         for (let i = 0; i < 4; i++) {
@@ -791,104 +782,233 @@ function buildGrid() {
           const phi = COS[n][xi]*COS[m][yi] + sg*COS[m][xi]*COS[n][yi];
           re += pm[k+2]*phi; im += pm[k+3]*phi;
         }
-        E += re*re + im*im;
+        E += re*re + im*im; if (j === 0) s = Math.abs(re) > Math.abs(im) ? re : im;
       }
-      const a = Math.sqrt(E); ampGrid[yi*GRID + xi] = a; if (a > max) max = a;
-    }
-  } else {   // idealised plate (real physics off): the classic Chladni formula at the current pitch
-    const a = Math.sqrt(patternHz/12), n = a, m = a*0.62 + 1, w = 0.5 + 0.5*Math.sin(a*2.1);
-    for (let yi = 0; yi < GRID; yi++) for (let xi = 0; xi < GRID; xi++) {
+    } else {   // idealised plate: the classic Chladni formula at the current pitch
+      const a = Math.sqrt(patternHz/12), n = a, m = a*0.62 + 1, w = 0.5 + 0.5*Math.sin(a*2.1);
       const px = xi/(GRID-1) - 0.5, py = yi/(GRID-1) - 0.5;
       const c1 = Math.cos(Math.PI*n*px)*Math.cos(Math.PI*m*py), c2 = Math.cos(Math.PI*m*px)*Math.cos(Math.PI*n*py);
-      const v = Math.abs((c1 - c2)*(1 - w) + (c1 + c2)*w); ampGrid[yi*GRID + xi] = v; if (v > max) max = v;
+      s = (c1 - c2)*(1 - w) + (c1 + c2)*w; E = s*s;
     }
+    const i = yi*GRID + xi, a = Math.sqrt(E); ampGrid[i] = a; shapeGrid[i] = s;
+    if (a > max) max = a; if (Math.abs(s) > smax) smax = Math.abs(s);
   }
-  for (let i = 0; i < ampGrid.length; i++) ampGrid[i] /= max;
+  for (let i = 0; i < ampGrid.length; i++) { ampGrid[i] /= max; plateBytes[i] = Math.round(127.5 + 127*shapeGrid[i]/smax); }
   const h = (GRID - 1) / 2;
   for (let yi = 0; yi < GRID; yi++) for (let xi = 0; xi < GRID; xi++) {
     const i = yi*GRID + xi, xl = Math.max(0, xi-1), xr = Math.min(GRID-1, xi+1), yl = Math.max(0, yi-1), yr = Math.min(GRID-1, yi+1);
     gxGrid[i] = (ampGrid[yi*GRID + xr] - ampGrid[yi*GRID + xl]) * h;
     gyGrid[i] = (ampGrid[yr*GRID + xi] - ampGrid[yl*GRID + xi]) * h;
   }
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, plateTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, GRID, GRID, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, plateBytes);
 }
-let grainN = 0, gpos = null;
+let grainN = 0, gpos = null, gbri = null, gpts = null;
 const grainCount = () => Q === QUALITY.ultra ? 160000 : Q === QUALITY.hd ? 70000 : 30000;
 function sprinkle() { for (let i = 0; i < gpos.length; i++) gpos[i] = Math.random(); }
 function ensureGrains() {
   const n = grainCount(); if (n === grainN) return;
-  grainN = n; gpos = new Float32Array(n*2); sprinkle();
-  const bri = new Float32Array(n);
-  for (let i = 0; i < n; i++) bri[i] = Math.random() < 0.03 ? 1.9 : 0.4 + Math.random()*0.8;   // a few grains catch the light
-  gl.bindBuffer(gl.ARRAY_BUFFER, briBuf); gl.bufferData(gl.ARRAY_BUFFER, bri, gl.STATIC_DRAW);
-  gl.bindBuffer(gl.ARRAY_BUFFER, posBuf); gl.bufferData(gl.ARRAY_BUFFER, gpos, gl.DYNAMIC_DRAW);
-  gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+  grainN = n; gpos = new Float32Array(n*2); gbri = new Float32Array(n); gpts = new Float32Array(n*6); sprinkle();
+  for (let i = 0; i < n; i++) gbri[i] = Math.random() < 0.03 ? 1.9 : 0.4 + Math.random()*0.8;
 }
-function stepGrains(shake) {
-  if (shake < 0.01) return;
-  const J = 0.014*shake, D = 0.00009*shake, last = GRID - 1;
+function stepGrains(gMax, f0) {
+  gammaMax = gMax;
+  if (gMax <= 1) return;                                   // nowhere does the plate beat gravity: nothing moves
+  const hop0 = 0.009 * Math.min(6, Math.max(0.2, Math.pow(440 / f0, 2))), last = GRID - 1;
   for (let i = 0; i < grainN; i++) {
     let x = gpos[2*i], y = gpos[2*i + 1];
     const fx = x*last, fy = y*last; let xi = fx|0, yi = fy|0; if (xi >= last) xi = last - 1; if (yi >= last) yi = last - 1;
     const tx = fx - xi, ty = fy - yi, k = yi*GRID + xi;
-    const a = (ampGrid[k]*(1-tx) + ampGrid[k+1]*tx)*(1-ty) + (ampGrid[k+GRID]*(1-tx) + ampGrid[k+GRID+1]*tx)*ty;
-    if (a < 0.015) continue;                       // resting on a still line
-    const s = a*a*J*4 + a*J*0.2;
-    x += (Math.random() + Math.random() - 1)*s - gxGrid[k]*D;
-    y += (Math.random() + Math.random() - 1)*s - gyGrid[k]*D;
-    if (x < 0 || x > 1 || y < 0 || y > 1) { x = Math.random(); y = Math.random(); }   // fell off; fresh sand lands
+    const A = (ampGrid[k]*(1-tx) + ampGrid[k+1]*tx)*(1-ty) + (ampGrid[k+GRID]*(1-tx) + ampGrid[k+GRID+1]*tx)*ty;
+    const Gm = gMax * A;                                   // local acceleration in units of g
+    if (Gm <= 1) continue;                                 // friction holds the grain
+    const hop = hop0 * Math.sqrt(Gm*Gm - 1) / gMax;        // launch speed² ∝ Γ² − 1
+    const ang = Math.random() * 6.2831853, r = hop * Math.sqrt(-2*Math.log(Math.random() + 1e-9)) * 0.7;
+    x += Math.cos(ang)*r - gxGrid[k]*hop*0.02;             // plus a small push down the slope it was thrown from
+    y += Math.sin(ang)*r - gyGrid[k]*hop*0.02;
+    if (x < 0 || x > 1 || y < 0 || y > 1) { x = Math.random(); y = Math.random(); }   // fell off the edge; fresh sand lands
     gpos[2*i] = x; gpos[2*i + 1] = y;
   }
 }
 function drawGrains(w, h, weight) {
   if (weight < 0.01 || !grainN) return;
-  gl.useProgram(gpr);
-  gl.bindBuffer(gl.ARRAY_BUFFER, posBuf); gl.bufferSubData(gl.ARRAY_BUFFER, 0, gpos);
-  gl.enableVertexAttribArray(gLocP); gl.vertexAttribPointer(gLocP, 2, gl.FLOAT, false, 0, 0);
-  gl.bindBuffer(gl.ARRAY_BUFFER, briBuf);
-  gl.enableVertexAttribArray(gLocB); gl.vertexAttribPointer(gLocB, 1, gl.FLOAT, false, 0, 0);
-  gl.uniform2f(guR, w, h); gl.uniform1f(guPSZ, Math.max(1.0, Math.min(w, h)/700) * (0.75 + 0.25*strength));
-  gl.uniform1f(guRAIN, colour === "rain" ? 1 : 0); gl.uniform1f(guT, performance.now()/1000);
-  gl.uniform3fv(guGC, colSm); gl.uniform1f(guGI, visSm * bright * 0.6 * weight);
-  gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
-  gl.blendEquation(negative ? gl.FUNC_REVERSE_SUBTRACT : gl.FUNC_ADD);
-  gl.drawArrays(gl.POINTS, 0, grainN);
-  gl.disable(gl.BLEND); gl.blendEquation(gl.FUNC_ADD);
-  gl.disableVertexAttribArray(gLocB);
-  gl.useProgram(pr); gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
-  gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  const size = Math.max(1.0, Math.min(w, h)/700) * (0.75 + 0.25*strength), gi = visSm * bright * 0.6 * weight;
+  const rain = colour === "rain";
+  for (let i = 0; i < grainN; i++) {
+    const o = i*6, x = gpos[2*i], y = gpos[2*i + 1], b = gbri[i] * gi;
+    gpts[o] = x; gpts[o+1] = y; gpts[o+2] = size * (0.75 + 0.45*gbri[i]);
+    if (rain) { const hh = (Math.atan2(y - 0.5, x - 0.5)/6.2831853 + 1) % 1; gpts[o+3] = b*Math.max(0, Math.min(1, Math.abs(hh*6 - 3) - 1)); gpts[o+4] = b*Math.max(0, Math.min(1, 2 - Math.abs(hh*6 - 2))); gpts[o+5] = b*Math.max(0, Math.min(1, 2 - Math.abs(hh*6 - 4))); }
+    else { gpts[o+3] = colSm[0]*b; gpts[o+4] = colSm[1]*b; gpts[o+5] = colSm[2]*b; }
+  }
+  drawPoints(gpts, grainN, w, h, 14.0);
 }
 
-const U = n => gl.getUniformLocation(pr, n);
-const uR=U("R"), uT=U("T"), uA=U("A"), uL=U("L"), uM=U("M"), uC=U("C"), uN=U("NEG"), uW=U("RAIN"), uV=U("VIS");
-const uBRI=U("BRI"), uSTR=U("STR"), uSP=U("SP[0]"), uZP=U("ZP");
-// Water ripples: deep-water capillary-gravity waves, ω² = g·k + (σ/ρ)·k³, driven at half the
-// sound's pitch (Faraday). The view shows a 2 cm wide patch of the surface.
-const G_ACC = 9.81, SIGMA_RHO = 0.0728 / 1000, VIEW_HALF_M = 0.01;
+// ---------- 2. WATER ----------
+// A shaken liquid surface: the Faraday instability. Shaking a container up and down modulates
+// gravity for the liquid, g(1 − F·cos Ωt). For a surface wave this is a pump that resonates with
+// waves oscillating at HALF the drive frequency (parametric resonance; a Mathieu equation). Below
+// a threshold the damping wins and the surface stays flat; above it, waves of exactly the length
+// that oscillates at Ω/2 grow out of tiny random ripples until nonlinearity limits them, and the
+// competing waves settle into a pattern. The ripple length comes from the real dispersion of water
+// (gravity + surface tension). Here the surface is simulated on a grid as a damped, parametrically
+// driven wave equation with a cubic saturation, inside a round dish 2 cm across.
+const SIGMA_RHO = 0.0728 / 1000, DISH_MM = 20;
 function rippleK(f) {
   const w2 = Math.pow(2*Math.PI*f, 2);
   let k = Math.cbrt(w2 / SIGMA_RHO);
   for (let i = 0; i < 6; i++) k -= (G_ACC*k + SIGMA_RHO*k*k*k - w2) / (G_ACC + 3*SIGMA_RHO*k*k);
   return k;
 }
-const sp = new Float32Array(16), zp = new Float32Array(4);
-let rippleMm = 0, rippleKind = "squares";
-const seedOf = f => { const q = Math.round(48 * Math.log2(f / 440)); return ((q * 0.61803) % 1 + 1) % 1; };   // per quarter-semitone, so a held note stays still
-function waveModel() {
-  sp.fill(0);
-  const peaks = spec.slice(0, 4), tot = peaks.reduce((s, x) => s + x.a, 0) || 1;
-  // the main figure follows patternHz, which changes note by note rather than sliding
-  peaks.forEach((c, j) => {
-    const f = j === 0 ? patternHz : c.f;
-    sp[j*4] = rippleK(f / 2) * VIEW_HALF_M;
-    sp[j*4+1] = f < 40 ? 3 : 2;               // hexagons at low drive pitches, squares in the capillary range
-    sp[j*4+2] = c.a / tot; sp[j*4+3] = seedOf(f);
-  });
-  rippleMm = 2*Math.PI / rippleK(patternHz / 2) * 1000; rippleKind = patternHz < 40 ? "hexagons" : "squares";
-  zp[0] = Math.sqrt(patternHz / 12) * 3.0;
-  zp[1] = peaks[1] ? Math.sqrt(peaks[1].f / 12) * 3.0 : 0;
-  zp[2] = peaks[1] ? peaks[1].a / (peaks[0].a || 1) : 0;
-  zp[3] = seedOf(patternHz);
+let WN = 0, wh = null, whp = null, wmask = null, wlap = null, wbytes = null, wPhase = 0, wScale = 1, rippleMm = 0, driveRatio = 0;
+function ensureWater() {
+  const n = Q === QUALITY.ultra ? 220 : Q === QUALITY.hd ? 180 : 140;
+  if (n === WN) return;
+  WN = n; wh = new Float32Array(n*n); whp = new Float32Array(n*n); wlap = new Float32Array(n*n); wbytes = new Uint8Array(n*n); wmask = new Uint8Array(n*n);
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) { const dx = (x + 0.5)/n*2 - 1, dy = (y + 0.5)/n*2 - 1; wmask[y*n + x] = dx*dx + dy*dy < 0.97 ? 1 : 0; }
 }
+function stepWater(level, slow) {
+  ensureWater();
+  const n = WN, f0 = patternHz;
+  rippleMm = 2*Math.PI / rippleK(f0 / 2) * 1000;
+  const lam = rippleMm / DISH_MM * n;                       // ripple length in grid cells
+  const P = Math.max(16, Math.ceil(lam * 0.95));            // steps per drive period (keeps the scheme stable)
+  const w = Math.PI / P;                                    // the wave's own angular frequency per step (Ω/2)
+  const c2 = Math.pow(w / (2*Math.PI/lam), 2);              // wave speed² that makes that ripple length resonate
+  const gam = 0.05 * w, beta = 0.35 * w*w;
+  const Fc = 4 * gam / w;                                   // the damping threshold
+  driveRatio = Math.min(2.6, level * 2.4);                  // how far above threshold the sound pushes the surface
+  const F = Math.min(0.48, Fc * driveRatio);
+  const comps = spec.slice(0, 4), tot = comps.reduce((s, x) => s + x.a, 0) || 1;
+  const steps = slow ? Math.max(2, Math.round(P / 12)) : 2*P;
+  // a whisper of random motion: the surface is never perfectly still, and the instability grows from it
+  for (let k = 0; k < 40; k++) { const i = (Math.random()*n*n)|0; if (wmask[i]) wh[i] += (Math.random() - 0.5) * 1e-3; }
+  for (let s = 0; s < steps; s++) {
+    let drive = 0;
+    for (const c of comps) drive += (c.a / tot) * Math.cos(2*Math.PI/P * (c.f / f0) * wPhase);
+    const ft = 1 + F * drive;
+    for (let y = 1; y < n - 1; y++) for (let x = 1; x < n - 1; x++) {
+      const i = y*n + x; wlap[i] = wh[i-1] + wh[i+1] + wh[i-n] + wh[i+n] - 4*wh[i];
+    }
+    for (let i = 0; i < n*n; i++) {
+      if (!wmask[i]) { wh[i] = 0; whp[i] = 0; continue; }
+      const h = wh[i], v = h - whp[i];
+      const nh = h + v*(1 - gam) + c2*ft*wlap[i] - beta*h*h*h;
+      whp[i] = h; wh[i] = nh;
+    }
+    wPhase++;
+  }
+  let max = 1e-6; for (let i = 0; i < n*n; i++) { const a = Math.abs(wh[i]); if (a > max) max = a; }
+  wScale += (Math.max(max, 0.05) - wScale) * 0.1;
+  for (let i = 0; i < n*n; i++) wbytes[i] = Math.max(0, Math.min(255, Math.round(127.5 + 127*wh[i]/wScale)));
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, waterTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, n, n, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, wbytes);
+}
+function calmWater() { if (!wh) return; for (let i = 0; i < wh.length; i++) { wh[i] *= 0.97; whp[i] *= 0.97; } }
+
+// ---------- 3. LIGHT FROM SOUND: sonoluminescence ----------
+// Sound in water is a pressure wave. Tiny gas bubbles in the water swell while the pressure is low
+// and are crushed when it swings high. A bubble's wall obeys the Rayleigh–Plesset equation:
+//   R·R'' + (3/2)·R'² = [ p_gas − 2σ/R − 4μR'/R − p0 − p_sound(t) ] / ρ
+// When the swing is strong enough the collapse is violent: the gas inside is squeezed almost
+// adiabatically to a few thousand kelvin or more, becomes a partly ionised plasma for a fraction of
+// a nanosecond, and glows. That flash is light made by sound. Its colour is the glow of that
+// temperature (blackbody), its brightness grows steeply with temperature (∝ T⁴). Bubbles of several
+// sizes are simulated; in the liquid they attract each other (secondary Bjerknes force) and drift
+// into clusters and streamers, so the light gathers into free-forming threads.
+const RHO = 998, SIGMA = 0.0725, MU = 0.001, P0 = 101325, KAPPA = 5/3, T0 = 293;
+const R0S = [2e-6, 3e-6, 4e-6, 5e-6, 6.5e-6, 8e-6, 11e-6, 15e-6];
+const bubState = R0S.map(r0 => ({ r0, R: r0, V: 0, Tmax: T0, Rmax: r0, samples: new Float32Array(32).fill(1) }));
+let lightT = T0, lightPa = 0;
+function rpAccel(b, R, V, pAc) {
+  const hc = b.r0 / 8.86, pg0 = P0 + 2*SIGMA/b.r0;
+  const pg = pg0 * Math.pow((b.r0**3 - hc**3) / Math.max(R**3 - hc**3, 1e-30), KAPPA);
+  return ((pg - 2*SIGMA/R - 4*MU*V/R - P0 - pAc) / RHO - 1.5*V*V) / R;
+}
+function stepBubbles(level) {
+  const f0 = patternHz, Tp = 1 / f0, comps = spec.slice(0, 4), tot = comps.reduce((s, x) => s + x.a, 0) || 1;
+  lightPa = P0 * (0.6 + 0.9*level);                      // the sound's pressure swing in the liquid
+  const pAc = t => { let p = 0; for (const c of comps) p += (c.a / tot) * Math.sin(2*Math.PI*c.f*t); return lightPa * p; };
+  let hottest = T0;
+  for (const b of bubState) {
+    let t = 0, R = b.R, V = b.V, Tmax = T0, Rmax = R, guard = 0, si = 0;
+    const hc = b.r0 / 8.86;
+    while (t < Tp && guard++ < 9000) {
+      const dt = Math.max(Math.min(Tp/400, 0.03 * R / (Math.abs(V) + 1e-3), Tp - t), Math.min(2e-10, Tp - t));
+      // RK4 step
+      const a1 = rpAccel(b, R, V, pAc(t));
+      const R2 = R + 0.5*dt*V, V2 = V + 0.5*dt*a1, a2 = rpAccel(b, Math.max(R2, hc*1.0001), V2, pAc(t + dt/2));
+      const R3 = R + 0.5*dt*V2, V3 = V + 0.5*dt*a2, a3 = rpAccel(b, Math.max(R3, hc*1.0001), V3, pAc(t + dt/2));
+      const R4 = R + dt*V3, V4 = V + dt*a3, a4 = rpAccel(b, Math.max(R4, hc*1.0001), V4, pAc(t + dt));
+      R += dt*(V + 2*V2 + 2*V3 + V4)/6; V += dt*(a1 + 2*a2 + 2*a3 + a4)/6;
+      if (R < hc*1.001) { R = hc*1.001; V = Math.abs(V)*0.3; }
+      if (!isFinite(R) || !isFinite(V)) { R = b.r0; V = 0; }
+      if (R > 300*b.r0) { R = 300*b.r0; V = Math.min(V, 0); }
+      t += dt;
+      const T = T0 * Math.pow((b.r0**3 - hc**3) / (R**3 - hc**3), KAPPA - 1);   // adiabatic heating
+      if (T > Tmax) Tmax = T; if (R > Rmax) Rmax = R;
+      while (si < 32 && t >= si*Tp/32) { b.samples[si++] = R / b.r0; }
+    }
+    b.R = R; b.V = V; b.Tmax = Math.min(Tmax, 25000); b.Rmax = Rmax;   // this simple model overshoots; measured peaks are ~10,000–20,000 K
+    if (b.Tmax > hottest) hottest = b.Tmax;
+  }
+  lightT = hottest;
+}
+function blackbody(T) {   // approximate colour of a glowing body at temperature T (kelvin)
+  const t = T / 100; let r, g, b;
+  if (t <= 66) { r = 255; g = 99.47*Math.log(t) - 161.12; b = t <= 19 ? 0 : 138.52*Math.log(t - 10) - 305.04; }
+  else { r = 329.7*Math.pow(t - 60, -0.1332); g = 288.12*Math.pow(t - 60, -0.0755); b = 255; }
+  return [r, g, b].map(v => Math.max(0, Math.min(255, v)) / 255);
+}
+const NB = 900, bpos = new Float32Array(NB*2), bvel = new Float32Array(NB*2), bsize = new Uint8Array(NB), bpts = new Float32Array(NB*6);
+for (let i = 0; i < NB; i++) { const a = Math.random()*6.283, r = Math.sqrt(Math.random())*0.46; bpos[2*i] = 0.5 + Math.cos(a)*r; bpos[2*i+1] = 0.5 + Math.sin(a)*r; bsize[i] = (Math.random()*R0S.length)|0; }
+let bubPhase = 0;
+function moveBubbles(level) {
+  // secondary Bjerknes attraction between neighbouring bubbles (on a coarse grid), plus random drift
+  const C = 24, cells = new Array(C*C);
+  for (let i = 0; i < NB; i++) { const k = Math.min(C-1, (bpos[2*i]*C)|0) + Math.min(C-1, (bpos[2*i+1]*C)|0)*C; (cells[k] || (cells[k] = [])).push(i); }
+  const pull = 0.000006 * (0.3 + level);
+  for (let i = 0; i < NB; i++) {
+    const x = bpos[2*i], y = bpos[2*i+1], cx = Math.min(C-1, (x*C)|0), cy = Math.min(C-1, (y*C)|0);
+    let fx = 0, fy = 0;
+    for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++) {
+      const list = cells[(cy+oy)*C + (cx+ox)]; if (!list || cx+ox < 0 || cx+ox >= C || cy+oy < 0 || cy+oy >= C) continue;
+      for (const j of list) {
+        if (j === i) continue;
+        const dx = bpos[2*j] - x, dy = bpos[2*j+1] - y, d2 = dx*dx + dy*dy + 2e-6;
+        const s = Math.min(4, (bubState[bsize[i]].Rmax + bubState[bsize[j]].Rmax) * 2e3);
+        const k = d2 < 1.2e-4 ? -3*s : s;                  // attract at a distance, but bubbles don't merge into one point
+        fx += dx/d2*k; fy += dy/d2*k;
+      }
+    }
+    bvel[2*i] = bvel[2*i]*0.9 + fx*pull + (Math.random() - 0.5)*0.0004;
+    bvel[2*i+1] = bvel[2*i+1]*0.9 + fy*pull + (Math.random() - 0.5)*0.0004;
+    const sp2 = Math.hypot(bvel[2*i], bvel[2*i+1]); if (sp2 > 0.004) { bvel[2*i] *= 0.004/sp2; bvel[2*i+1] *= 0.004/sp2; }
+    let nx = x + bvel[2*i], ny = y + bvel[2*i+1];
+    const dx = nx - 0.5, dy = ny - 0.5, r = Math.hypot(dx, dy);
+    if (r > 0.47) { nx = 0.5 + dx/r*0.47; ny = 0.5 + dy/r*0.47; bvel[2*i] *= -0.5; bvel[2*i+1] *= -0.5; }
+    bpos[2*i] = nx; bpos[2*i+1] = ny;
+  }
+}
+function drawBubbles(w, h, weight) {
+  if (weight < 0.01) return;
+  const px = Math.min(w, h) / 2.15, gi = visSm * bright * weight;
+  bubPhase = (bubPhase + 1) % 32;
+  for (let i = 0; i < NB; i++) {
+    const b = bubState[bsize[i]], o = i*6, rr = b.samples[bubPhase];
+    bpts[o] = bpos[2*i]; bpts[o+1] = bpos[2*i+1];
+    // the flash: brightness ∝ T⁴ (Stefan–Boltzmann), only once the collapse is hot enough to glow
+    const glow = b.Tmax > 2500 ? Math.min(1.6, Math.pow(b.Tmax / 9000, 4)) : 0;
+    const flash = glow * (rr < 0.6 ? 1 : 0.3);
+    const col = colour === "auto" ? blackbody(b.Tmax) : colSm;
+    bpts[o+2] = Math.max(2, px * 0.006 * (0.6 + 0.4*strength)) * (flash > 0.05 ? 1 + 1.5*Math.min(1, flash) : 1);
+    const k = gi * (0.05 + flash);
+    bpts[o+3] = col[0]*k; bpts[o+4] = col[1]*k; bpts[o+5] = col[2]*k;
+  }
+  drawPoints(bpts, NB, w, h, 6.0);
+}
+const U = n => gl.getUniformLocation(pr, n);
+const uR=U("R"), uT=U("T"), uA=U("A"), uL=U("L"), uM=U("M"), uC=U("C"), uN=U("NEG"), uW=U("RAIN"), uV=U("VIS");
+const uBRI=U("BRI"), uSTR=U("STR");
 let strength = 2;
 try { const v = +localStorage.getItem("cym-strength"); if (v >= 100 && v <= 400) $("strength").value = v; } catch (e) {}
 function setStrength() { strength = +$("strength").value / 100; $("strengthOut").textContent = $("strength").value + "%"; }
@@ -947,6 +1067,7 @@ $("negative").onchange = e => {
 try { const s = JSON.parse(localStorage.getItem("cym-colour") || "null"); if (s) { negative = !!s.negative; $("negative").checked = negative; pickColour(s.colour || "auto", false); } else pickColour("auto", false); }
 catch (e) { pickColour("auto", false); }
 function chosenRGB(pitchRGB) {
+  if (colour === "auto" && medium === 2) return blackbody(Math.max(lightT, 1500));   // light from sound: the colour of its heat
   if (colour === "auto") return pitchRGB;
   if (colour === "white" || colour === "neg" || colour === "rain") return [1, 1, 1];
   const c = COLOURS.find(c => c.id === colour); return nmToRGB(c.nm);
@@ -1020,15 +1141,24 @@ function frame(t){
   const a = Math.sqrt(patternHz/12);   // when the sound stops the figure melts where it is, without moving
   gl.uniform2f(uR, cv.width, cv.height); gl.uniform1f(uT, reduce ? 0 : t/1000);
   gl.uniform1f(uA, a); gl.uniform1f(uL, levelSm); gl.uniform1f(uM, mediumSm); gl.uniform3fv(uC, colSm);
-  plateInfo = plateModel(); waveModel(); gl.uniform4fv(uSP, sp); gl.uniform4fv(uZP, zp); psSm += (plateInfo.strength - psSm) * 0.15;
-  gl.drawArrays(gl.TRIANGLES, 0, 3);
-  // sand: rebuild the plate's motion map when the sound changes, bounce the grains, draw them
-  const wSand = Math.max(0, 1 - mediumSm);
+  plateInfo = plateModel(); psSm += (plateInfo.strength - psSm) * 0.15;
+  // ---- run the physics for whichever medium is showing ----
+  const wSand = Math.max(0, 1 - mediumSm), wWater = Math.max(0, 1 - Math.abs(mediumSm - 1)), wLight = Math.max(0, mediumSm - 1);
   ensureGrains();
   const key = physics ? spec.slice(0, 6).map(x => Math.round(x.f*2) + ":" + Math.round(x.a*200)).join(",") : "i" + Math.round(patternHz*10);
   if (key !== gridKey && t - gridAt > 100) { gridKey = key; gridAt = t; buildGrid(); }
-  if (wSand > 0.01 && lit) stepGrains(levelSm * (physics ? 0.15 + 0.85*psSm : 1));
+  // plate: peak acceleration at the most-moving spot, in units of g; louder sound, stronger shaking;
+  // with real physics the plate only shakes hard near its resonances
+  if (wSand > 0.01) stepGrains(lit ? 9 * levelSm * (physics ? 0.12 + 0.88*psSm : 1) : 0, patternHz);
+  if (wWater > 0.01) stepWater(lit ? levelSm : 0, $("slowmo").checked);
+  if (wLight > 0.01) {
+    if (lit) stepBubbles(levelSm); else bubState.forEach(b => { b.Tmax = T0; });
+    moveBubbles(lit ? levelSm : 0);
+  }
+  gl.uniform1f(uPH, reduce ? 1 : Math.sin(t/1000 * 2*Math.PI * 0.6)); gl.uniform1f(uWN, WN || 1);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
   drawGrains(cv.width, cv.height, wSand);
+  drawBubbles(cv.width, cv.height, wLight);
   if (rec) { compose(); }
   if (t - lastHud > 90) {
     if (rec) { const s = Math.floor((performance.now() - recStart) / 1000); $("recTime").textContent = Math.floor(s/60) + ":" + String(s%60).padStart(2, "0"); }
@@ -1038,8 +1168,9 @@ function frame(t){
     $("nmOut").textContent = Math.round(L.nm) + " nm"; $("octOut").textContent = L.oct;
     $("sw").style.color = `rgb(${rgb.map(x=>x*255|0)})`;
     const b = plateInfo.best;
-    $("modeOut").textContent = medium === 2 ? `hexagonal filaments` : medium ? `${rippleKind} · ripples ${rippleMm.toFixed(2)} mm`
-      : physics && b ? `mode (${b.n},${b.m})${b.sg > 0 ? "+" : "−"} ${Math.round(b.f)} Hz · ${Math.round(psSm*100)}% resonant` : `${a.toFixed(1)} · ${(a*0.62+1).toFixed(1)}`;
+    $("modeOut").textContent = medium === 2 ? `bubble collapse ${Math.round(lightT).toLocaleString()} K · ${(lightPa/101325).toFixed(2)} atm`
+      : medium ? `ripples ${rippleMm.toFixed(2)} mm · ${driveRatio.toFixed(1)}× threshold`
+      : `Γ ${gammaMax.toFixed(1)} g` + (physics && b ? ` · mode (${b.n},${b.m})${b.sg > 0 ? "+" : "−"} ${Math.round(b.f)} Hz` : "");
   }
   requestAnimationFrame(frame);
 }
@@ -1063,6 +1194,7 @@ function renderAt(w, h) {
   gl.useProgram(pr); gl.uniform2f(uR, w, h); gl.uniform1f(uSS, Q.ss);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
   drawGrains(w, h, Math.max(0, 1 - mediumSm));
+  drawBubbles(w, h, Math.max(0, mediumSm - 1));
   comp.width = w; comp.height = h; compose();
   cv.width = ow; cv.height = oh; gl.viewport(0, 0, ow, oh); gl.uniform2f(uR, ow, oh);
 }
