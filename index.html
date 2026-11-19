@@ -193,7 +193,7 @@ button:disabled { opacity: .45; cursor: default; }
         <button id="mPlasma">Plasma</button>
       </div>
       <label class="check"><input type="checkbox" id="physics" checked> Real plate physics (sand)</label>
-      <p class="note" id="physNote">An ideal 30 cm × 1 mm brass plate. Sand only settles near the plate's resonant pitches, and every overtone in the sound shapes the lines. Between resonances the pattern stays faint, as on a real plate.</p>
+      <p class="note" id="physNote">An ideal 30 cm × 1 mm brass plate covered in real grains. The grains bounce where the plate moves and come to rest on the still lines. Near a resonant pitch they gather fast; between resonances the plate barely moves and the sand drifts slowly, as on a real plate. Untick for the classic idealised plate.</p>
       <h2 style="margin-top:8px">Colour</h2>
       <div class="swatches" id="swatches" role="group" aria-label="Light colour"></div>
       <div class="swname" id="swName" aria-live="polite"><b>From the pitch</b> · each note glows its own colour</div>
@@ -628,10 +628,12 @@ const VS = "attribute vec2 p;void main(){gl_Position=vec4(p,0,1);}";
 const FS = `
 precision highp float;
 uniform vec2 R; uniform float T, A, L, M, NEG, RAIN, VIS; uniform vec3 C;
-uniform vec4 PM[24]; uniform float PN, PS, PHY;
-uniform float G;
-uniform float BRI;
-uniform float STR;   // pattern strength (1 = natural): thicker, denser, brighter lines   // light intensity chosen by the viewer (1 = normal)   // formation: 0 = unformed liquid shimmer, 1 = the pattern has fully settled   // real plate: modes (n, m, re, im) per overtone, mean energy, resonance, on/off
+uniform float G;     // formation: 0 = the surface is still calm, 1 = the pattern has fully built up
+uniform float BRI;   // light intensity chosen by the viewer (1 = normal)
+uniform float STR;   // pattern strength (1 = natural)
+uniform float SS;    // supersampling: 2 = four samples per pixel
+uniform vec4 SP[4];  // water: per spectral peak (wavenumber, lattice directions 2 or 3, share, seed)
+uniform vec4 ZP;     // plasma: (lattice wavenumber, second lattice wavenumber, second share, seed)
 #define PI 3.14159265
 float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float vnoise(vec2 p){
@@ -639,108 +641,101 @@ float vnoise(vec2 p){
   return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
 }
 float fbm(vec2 p){ float v = 0.0, a = 0.5; for (int i = 0; i < 4; i++) { v += a*vnoise(p); p = p*2.03 + 1.7; a *= 0.5; } return v; }
-float realPlate(vec2 uv){
-  vec2 q = uv*0.5 + 0.5;            // plate coordinates 0..1
-  float E = 0.0;
-  for (int j = 0; j < 6; j++) {
-    float re = 0.0, im = 0.0;
-    for (int i = 0; i < 4; i++) {
-      vec4 md = PM[j*4 + i];
-      float mm = abs(md.y), sg = sign(md.y);   // sign of m encodes the sum (+) or difference (−) shape
-      float phi = cos(PI*md.x*q.x)*cos(PI*mm*q.y) + sg*cos(PI*mm*q.x)*cos(PI*md.x*q.y);
-      re += md.z*phi; im += md.w*phi;
-    }
-    E += re*re + im*im;             // time-averaged motion from this overtone
-  }
-  return sqrt(E / PN) * 0.6;
-}
-float plate(vec2 p, float a){
-  float n = a, m = a*0.62 + 1.0;
-  float s = cos(PI*n*p.x)*cos(PI*m*p.y) - cos(PI*m*p.x)*cos(PI*n*p.y);
-  float s2 = cos(PI*n*p.x)*cos(PI*m*p.y) + cos(PI*m*p.x)*cos(PI*n*p.y);
-  float w = 0.5 + 0.5*sin(a*2.1);
-  return mix(s, s2, w);
-}
-// Free-forming wave fields for water and plasma. Each spectral peak of the sound (fundamental,
-// overtones, other notes) sends waves across the surface from 7 irregular directions; where
-// they cancel, the surface is still and light gathers, as sand does on the plate. Nothing is
-// centred: directions and phases come from the pitch itself, so each tone draws its own figure.
-uniform vec4 SP[6];   // per peak: water wavenumber, plasma wavenumber, share of loudness, seed
-float waveField(vec2 p, float plasmaSel){
-  float v = 0.0;
-  for (int j = 0; j < 6; j++) {
+
+// ---- WATER: a Faraday-wave surface photographed under a ring light (the CymaScope set-up) ----
+// The surface height is a standing-wave lattice at the ripple wavelength: squares in the capillary
+// regime, hexagons at low drive pitches (as measured in Faraday experiments). Slow, large-scale
+// bending of the lattice gives the dislocations and grain boundaries seen in real dishes, and the
+// dish wall sends its own ripples inward. The image is the ring light's reflection: a patch of
+// surface lights up when its tilt reflects the ring into the camera, so each crest shows a glint.
+float height(vec2 p){
+  float h = 0.0;
+  for (int j = 0; j < 4; j++) {
     vec4 c = SP[j];
     if (c.z <= 0.0) continue;
-    float k = mix(c.x, c.y, plasmaSel), s = 0.0;
-    for (int d = 0; d < 7; d++) {
-      float fd = float(d);
-      float h1 = hash(vec2(c.w*91.7 + fd, 3.1)), h2 = hash(vec2(c.w*53.3 + fd, 7.7));
-      float ang = 6.2831853*(fd/7.0) + (h1 - 0.5)*0.9;
-      s += cos(k*dot(p, vec2(cos(ang), sin(ang))) + 6.2831853*h2 + T*0.35*(h1 - 0.5));
+    float k = c.x;
+    vec2 warp = (vec2(fbm(p*0.55 + c.w*17.0 + T*0.02), fbm(p*0.55 + c.w*29.0 + 3.1 - T*0.017)) - 0.5) * (9.0 / k);
+    vec2 q = p + warp;
+    float rot = c.w * PI;
+    float s = 0.0;
+    for (int d = 0; d < 3; d++) {
+      if (float(d) >= c.y) break;
+      float ang = rot + PI * float(d) / c.y;
+      s += cos(k * dot(q, vec2(cos(ang), sin(ang))));
     }
-    v += c.z * s * 0.378;
+    h += c.z * s / c.y;
   }
-  return v;
+  float r = length(p);   // meniscus ripples from the dish wall, fading toward the middle
+  h += 0.35 * cos(SP[0].x * (1.0 - r) * 1.0) * exp(-(1.0 - r) * SP[0].x * 0.09);
+  return h;
 }
-// water: capillary ripples on a liquid surface (Faraday waves at half the driving pitch)
-float water(vec2 p){ return waveField(p, 0.0); }
-// plasma: the same kind of field, torn and bent by fast-moving charge, so the lines crackle and wander
-float plasma(vec2 p){
-  vec2 q = p + 0.28*(vec2(fbm(p*1.8 + vec2(T*0.9, 0.0)), fbm(p*1.8 + vec2(0.0, -T*0.8) + 4.3)) - 0.5)*(1.0 + L);
-  return waveField(q, 1.0);
+vec3 water(vec2 p, vec3 base){
+  float eps = 0.6 / SP[0].x;
+  float h0 = height(p), hx = height(p + vec2(eps, 0.0)), hy = height(p + vec2(0.0, eps));
+  float amp = (0.06 + 0.10*L) * G * (0.7 + 0.3*STR) * (0.8 + 0.2*cos(T*1.3));   // waves build up with G
+  vec2 grad = vec2(hx - h0, hy - h0) / eps * amp / SP[0].x * 9.0;
+  float tilt = length(grad);
+  float ring = exp(-pow((tilt - 0.17) / (0.035 + 0.02*STR), 2.0));       // reflection of the ring light
+  float sheen = exp(-tilt*tilt*120.0) * 0.06;                              // flat water: a faint grey sheen
+  float spark = pow(ring, 6.0);
+  return base * (ring * 1.5 + sheen) + vec3(1.0) * spark * 0.6;
 }
-uniform float SS;   // supersampling: 2 = four samples per pixel for ultra-fine, smooth lines
+
+// ---- PLASMA: self-organised filaments in a dielectric-barrier discharge ----
+// Seen through the electrode, the micro-discharges arrange themselves into a hexagonal lattice of
+// bright spots with a faint honeycomb glow between them; the lattice drifts and has defects, spots
+// flicker and ignite one by one. A strong overtone adds a second, rotated lattice (a superlattice).
+vec3 hexSpot(vec2 p, float k, float seed){
+  float s = 2.0 * PI / k;                       // spot spacing
+  vec2 r = vec2(1.0, 1.7320508) * s;
+  vec2 a = mod(p, r) - r*0.5, b = mod(p - r*0.5, r) - r*0.5;
+  vec2 g = dot(a, a) < dot(b, b) ? a : b;
+  vec2 id = floor((p - g) / s * 1.01 + 0.5);
+  float d = length(g) / s;
+  return vec3(d, hash(id + seed*13.0), hash(id + seed*7.0 + floor(T*18.0)));
+}
+vec3 plasma(vec2 p, vec3 base){
+  vec2 q = p + (vec2(fbm(p*0.8 + T*0.05), fbm(p*0.8 + 5.0 - T*0.04)) - 0.5) * 0.35;
+  vec3 h1 = hexSpot(q, ZP.x, ZP.w);
+  float on = step(h1.y, G * 1.15) * step(h1.y, 0.95);                // ignite one by one; a few stay dark
+  float rad = 0.11 * (0.7 + 0.3*STR);
+  float spot = exp(-pow(h1.x / rad, 2.0)) * on * (0.55 + 0.45*h1.z);
+  float honey = smoothstep(0.30, 0.5, h1.x) * 0.10 * G;                 // Townsend glow between the filaments
+  float spot2 = 0.0;
+  if (ZP.z > 0.12) {
+    vec2 q2 = vec2(q.x*0.866 - q.y*0.5, q.x*0.5 + q.y*0.866);
+    vec3 h2 = hexSpot(q2, ZP.y, ZP.w + 3.0);
+    spot2 = exp(-pow(h2.x / (rad*0.8), 2.0)) * ZP.z * step(h2.y, G) * (0.5 + 0.5*h2.z);
+  }
+  float s = spot + spot2;
+  return base * (s * 1.6 + honey) + vec3(1.0) * pow(s, 3.0) * 0.7;
+}
+
 vec3 render(vec2 fc){
   vec2 uv = (fc - 0.5*R) / min(R.x, R.y) * 2.15;
-  float a = A, jitter = 0.004*L*sin(T*40.0);
-  // Liquid drift: while a pattern is forming the medium flows and the lines wander; once it has
-  // settled only a gentle shimmer remains. Nothing is pulled toward the centre.
-  float uf = 1.0 - G;
-  vec2 flow = vec2(fbm(uv*1.7 + vec2(T*0.11, -T*0.07)), fbm(uv*1.7 + vec2(-T*0.09, T*0.13) + 5.2)) - 0.5;
-  vec2 wuv = uv + flow * (0.22*uf*uf + 0.014*(0.4 + L));
-  float vp = PHY > 0.5 ? realPlate(wuv) : plate(wuv*0.5 + jitter, a);
-  float vw = M > 0.02 && M < 1.98 ? water(wuv) : 0.0;
-  float vz = M > 1.02 ? plasma(wuv) : 0.0;
   float wP = clamp(1.0 - M, 0.0, 1.0), wW = clamp(1.0 - abs(M - 1.0), 0.0, 1.0), wZ = clamp(M - 1.0, 0.0, 1.0);
-  float v = vp*wP + vw*wW + vz*wZ;
   float Mc = clamp(M, 0.0, 1.0);
   float mask = mix(1.0 - smoothstep(0.98, 1.0, max(abs(uv.x), abs(uv.y))), 1.0 - smoothstep(0.97, 1.0, length(uv)), Mc);
   float frame = mix(smoothstep(0.985,1.0,max(abs(uv.x),abs(uv.y))) * (1.0-smoothstep(1.0,1.015,max(abs(uv.x),abs(uv.y)))),
                     smoothstep(0.985,1.0,length(uv)) * (1.0-smoothstep(1.0,1.015,length(uv))), Mc);
-  // real plate: fainter away from resonance (less so with more strength, as with more sand)
-  float e = (0.25 + 0.9*L) * mix(1.0, mix(clamp(0.25*STR, 0.0, 0.9), 1.0, PS), wP*PHY);
-  float widen = 0.6 + 0.4*STR;
-  float core = exp(-abs(v)*mix(mix(70.0, 45.0, L), mix(7.0, 26.0, PS), wP*PHY) / widen);
-  float halo = exp(-abs(v)*7.0/widen)*0.32*widen;
-  // Emergence: light gathers in scattered places first and spreads until the whole figure is lit,
-  // the way sand or a liquid surface settles, instead of switching on everywhere at once.
-  float seed = fbm(uv*2.3 + 11.0);
-  float appear = smoothstep(seed - 0.05, seed + 0.25, G*1.3);
-  float rr = length(uv);
-  core *= appear;
-  halo *= mix(0.3, 1.0, appear);
-  // individual grains: the sand lines are made of fine, glinting particles (visible at HD and 4K)
-  float grain = hash(floor(uv * 520.0));
-  core *= mix(1.0, 0.45 + 1.1*grain, wP*0.7);
-  float body = (0.5+0.5*v)*0.05;
   vec3 base = C;
-  if (RAIN > 0.5) {   // rainbow: hue sweeps around the plate and drifts slowly
+  if (RAIN > 0.5) {
     float h = fract(atan(uv.y, uv.x)/(2.0*PI) + length(uv)*0.22 - T*0.03);
     base = clamp(abs(mod(h*6.0 + vec3(0.0,4.0,2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
   }
-  vec3 col = base*(core*1.4*(0.5 + 0.5*STR) + halo)*e + vec3(1.0)*core*core*0.55*e + base*body;
-  // the unformed medium: a faint, drifting glimmer that the lines condense out of
-  float glim = fbm(wuv*3.1 + vec2(T*0.05, T*0.04));
-  col += base * pow(glim, 3.0) * 0.55 * uf * e;
-  col += base * 0.05 * fbm(wuv*2.0 - T*0.1) * e * wZ;   // plasma: an even haze through the whole globe
+  float e = 0.35 + 0.8*L;
+  vec3 col = vec3(0.0);
+  // the sand plate itself: dark brushed metal; the sand is drawn on top as real grains
+  if (wP > 0.001) col += (0.03 + 0.02*fbm(uv*vec2(60.0, 1.5))) * (0.5 + 0.5*base) * wP;
+  if (wW > 0.001 && length(uv) < 1.0) col += water(uv, base) * wW * e;
+  if (wZ > 0.001 && length(uv) < 1.0) col += plasma(uv, base) * wZ * e;
   col *= mask;
   col += base*frame*0.25;
-  float vig = 1.0 - 0.15*dot(uv,uv)/4.0;
-  col *= vig;
+  col *= 1.0 - 0.15*dot(uv,uv)/4.0;
   col *= BRI;
-  col = col/(1.0+col*0.35);          // soft tone-map so bright peaks bloom, not clip
+  col = col/(1.0+col*0.35);
   vec3 o = clamp(pow(col, vec3(0.92)), 0.0, 1.0);
-  return mix(o, 1.0 - o, NEG) * VIS;   // NEG = 1: photographic negative; VIS = 0: black until sound plays
+  return mix(o, 1.0 - o, NEG) * VIS;
 }
 void main(){
   if (SS > 1.5) {
@@ -754,9 +749,118 @@ const pr = gl.createProgram(); gl.attachShader(pr, sh(gl.VERTEX_SHADER, VS)); gl
 gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
 gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,3,-1,-1,3]), gl.STATIC_DRAW);
 const loc = gl.getAttribLocation(pr, "p"); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+const quadBuf = gl.getParameter(gl.ARRAY_BUFFER_BINDING);
+
+// ---------- SAND: real grains ----------
+// Tens of thousands of grains sit on the plate. Each frame every grain is bounced by the plate
+// under it: where the plate moves a lot the grain jumps a random distance in proportion, and it
+// slides slightly downhill toward stiller places. Where the plate barely moves, grains come to
+// rest, so they pile up along the still (nodal) lines, unevenly and with stragglers, the way real
+// sand does. Grains that bounce off the edge fall away and fresh sand is sprinkled back on.
+const GVS = `attribute vec2 gp; attribute float gb; uniform vec2 R; uniform float PSZ, RAIN, T; uniform vec3 GC;
+varying float vb; varying vec3 vc;
+void main(){
+  vec2 uv = gp*2.0 - 1.0;
+  gl_Position = vec4(uv * 2.0*min(R.x, R.y)/(2.15*R), 0.0, 1.0);
+  gl_PointSize = PSZ * (0.75 + 0.45*gb);
+  vb = gb; vc = GC;
+  if (RAIN > 0.5) { float h = fract(atan(uv.y, uv.x)/6.2831853 + length(uv)*0.22 - T*0.03);
+    vc = clamp(abs(mod(h*6.0 + vec3(0.0,4.0,2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0); }
+}`;
+const GFS = `precision mediump float; varying float vb; varying vec3 vc; uniform float GI;
+void main(){ vec2 d = gl_PointCoord - 0.5; float a = exp(-dot(d, d)*14.0); gl_FragColor = vec4(vc * a * vb * GI, 1.0); }`;
+const gpr = gl.createProgram(); gl.attachShader(gpr, sh(gl.VERTEX_SHADER, GVS)); gl.attachShader(gpr, sh(gl.FRAGMENT_SHADER, GFS)); gl.linkProgram(gpr);
+const gLocP = gl.getAttribLocation(gpr, "gp"), gLocB = gl.getAttribLocation(gpr, "gb");
+const gU = n => gl.getUniformLocation(gpr, n);
+const guR = gU("R"), guPSZ = gU("PSZ"), guRAIN = gU("RAIN"), guT = gU("T"), guGC = gU("GC"), guGI = gU("GI");
+const posBuf = gl.createBuffer(), briBuf = gl.createBuffer();
+
+const GRID = 128, ampGrid = new Float32Array(GRID*GRID), gxGrid = new Float32Array(GRID*GRID), gyGrid = new Float32Array(GRID*GRID);
+const COS = []; for (let n = 0; n <= 18; n++) { const a = new Float32Array(GRID); for (let i = 0; i < GRID; i++) a[i] = Math.cos(Math.PI*n*i/(GRID-1)); COS.push(a); }
+let gridKey = "", gridAt = 0;
+function buildGrid() {
+  let max = 1e-12;
+  if (physics) {
+    for (let yi = 0; yi < GRID; yi++) for (let xi = 0; xi < GRID; xi++) {
+      let E = 0;
+      for (let j = 0; j < 6; j++) {
+        let re = 0, im = 0;
+        for (let i = 0; i < 4; i++) {
+          const k = (j*4 + i)*4; if (!pm[k+2] && !pm[k+3]) continue;
+          const n = pm[k], m = Math.abs(pm[k+1]), sg = Math.sign(pm[k+1]);
+          const phi = COS[n][xi]*COS[m][yi] + sg*COS[m][xi]*COS[n][yi];
+          re += pm[k+2]*phi; im += pm[k+3]*phi;
+        }
+        E += re*re + im*im;
+      }
+      const a = Math.sqrt(E); ampGrid[yi*GRID + xi] = a; if (a > max) max = a;
+    }
+  } else {   // idealised plate (real physics off): the classic Chladni formula at the current pitch
+    const a = Math.sqrt(patternHz/12), n = a, m = a*0.62 + 1, w = 0.5 + 0.5*Math.sin(a*2.1);
+    for (let yi = 0; yi < GRID; yi++) for (let xi = 0; xi < GRID; xi++) {
+      const px = xi/(GRID-1) - 0.5, py = yi/(GRID-1) - 0.5;
+      const c1 = Math.cos(Math.PI*n*px)*Math.cos(Math.PI*m*py), c2 = Math.cos(Math.PI*m*px)*Math.cos(Math.PI*n*py);
+      const v = Math.abs((c1 - c2)*(1 - w) + (c1 + c2)*w); ampGrid[yi*GRID + xi] = v; if (v > max) max = v;
+    }
+  }
+  for (let i = 0; i < ampGrid.length; i++) ampGrid[i] /= max;
+  const h = (GRID - 1) / 2;
+  for (let yi = 0; yi < GRID; yi++) for (let xi = 0; xi < GRID; xi++) {
+    const i = yi*GRID + xi, xl = Math.max(0, xi-1), xr = Math.min(GRID-1, xi+1), yl = Math.max(0, yi-1), yr = Math.min(GRID-1, yi+1);
+    gxGrid[i] = (ampGrid[yi*GRID + xr] - ampGrid[yi*GRID + xl]) * h;
+    gyGrid[i] = (ampGrid[yr*GRID + xi] - ampGrid[yl*GRID + xi]) * h;
+  }
+}
+let grainN = 0, gpos = null;
+const grainCount = () => Q === QUALITY.ultra ? 160000 : Q === QUALITY.hd ? 70000 : 30000;
+function sprinkle() { for (let i = 0; i < gpos.length; i++) gpos[i] = Math.random(); }
+function ensureGrains() {
+  const n = grainCount(); if (n === grainN) return;
+  grainN = n; gpos = new Float32Array(n*2); sprinkle();
+  const bri = new Float32Array(n);
+  for (let i = 0; i < n; i++) bri[i] = Math.random() < 0.03 ? 1.9 : 0.4 + Math.random()*0.8;   // a few grains catch the light
+  gl.bindBuffer(gl.ARRAY_BUFFER, briBuf); gl.bufferData(gl.ARRAY_BUFFER, bri, gl.STATIC_DRAW);
+  gl.bindBuffer(gl.ARRAY_BUFFER, posBuf); gl.bufferData(gl.ARRAY_BUFFER, gpos, gl.DYNAMIC_DRAW);
+  gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+}
+function stepGrains(shake) {
+  if (shake < 0.01) return;
+  const J = 0.014*shake, D = 0.00009*shake, last = GRID - 1;
+  for (let i = 0; i < grainN; i++) {
+    let x = gpos[2*i], y = gpos[2*i + 1];
+    const fx = x*last, fy = y*last; let xi = fx|0, yi = fy|0; if (xi >= last) xi = last - 1; if (yi >= last) yi = last - 1;
+    const tx = fx - xi, ty = fy - yi, k = yi*GRID + xi;
+    const a = (ampGrid[k]*(1-tx) + ampGrid[k+1]*tx)*(1-ty) + (ampGrid[k+GRID]*(1-tx) + ampGrid[k+GRID+1]*tx)*ty;
+    if (a < 0.015) continue;                       // resting on a still line
+    const s = a*a*J*4 + a*J*0.2;
+    x += (Math.random() + Math.random() - 1)*s - gxGrid[k]*D;
+    y += (Math.random() + Math.random() - 1)*s - gyGrid[k]*D;
+    if (x < 0 || x > 1 || y < 0 || y > 1) { x = Math.random(); y = Math.random(); }   // fell off; fresh sand lands
+    gpos[2*i] = x; gpos[2*i + 1] = y;
+  }
+}
+function drawGrains(w, h, weight) {
+  if (weight < 0.01 || !grainN) return;
+  gl.useProgram(gpr);
+  gl.bindBuffer(gl.ARRAY_BUFFER, posBuf); gl.bufferSubData(gl.ARRAY_BUFFER, 0, gpos);
+  gl.enableVertexAttribArray(gLocP); gl.vertexAttribPointer(gLocP, 2, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, briBuf);
+  gl.enableVertexAttribArray(gLocB); gl.vertexAttribPointer(gLocB, 1, gl.FLOAT, false, 0, 0);
+  gl.uniform2f(guR, w, h); gl.uniform1f(guPSZ, Math.max(1.0, Math.min(w, h)/700) * (0.75 + 0.25*strength));
+  gl.uniform1f(guRAIN, colour === "rain" ? 1 : 0); gl.uniform1f(guT, performance.now()/1000);
+  gl.uniform3fv(guGC, colSm); gl.uniform1f(guGI, visSm * bright * 0.6 * weight);
+  gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
+  gl.blendEquation(negative ? gl.FUNC_REVERSE_SUBTRACT : gl.FUNC_ADD);
+  gl.drawArrays(gl.POINTS, 0, grainN);
+  gl.disable(gl.BLEND); gl.blendEquation(gl.FUNC_ADD);
+  gl.disableVertexAttribArray(gLocB);
+  gl.useProgram(pr); gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+  gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+}
+
 const U = n => gl.getUniformLocation(pr, n);
 const uR=U("R"), uT=U("T"), uA=U("A"), uL=U("L"), uM=U("M"), uC=U("C"), uN=U("NEG"), uW=U("RAIN"), uV=U("VIS");
-const uBRI=U("BRI"), uSTR=U("STR"), uSP=U("SP[0]");
+const uBRI=U("BRI"), uSTR=U("STR"), uSP=U("SP[0]"), uZP=U("ZP");
 // Water ripples: deep-water capillary-gravity waves, ω² = g·k + (σ/ρ)·k³, driven at half the
 // sound's pitch (Faraday). The view shows a 2 cm wide patch of the surface.
 const G_ACC = 9.81, SIGMA_RHO = 0.0728 / 1000, VIEW_HALF_M = 0.01;
@@ -766,18 +870,24 @@ function rippleK(f) {
   for (let i = 0; i < 6; i++) k -= (G_ACC*k + SIGMA_RHO*k*k*k - w2) / (G_ACC + 3*SIGMA_RHO*k*k);
   return k;
 }
-const sp = new Float32Array(24);
-let rippleMm = 0;
+const sp = new Float32Array(16), zp = new Float32Array(4);
+let rippleMm = 0, rippleKind = "squares";
+const seedOf = f => { const q = Math.round(48 * Math.log2(f / 440)); return ((q * 0.61803) % 1 + 1) % 1; };   // per quarter-semitone, so a held note stays still
 function waveModel() {
   sp.fill(0);
-  const peaks = spec.slice(0, 6), tot = peaks.reduce((s, x) => s + x.a, 0) || 1;
+  const peaks = spec.slice(0, 4), tot = peaks.reduce((s, x) => s + x.a, 0) || 1;
+  // the main figure follows patternHz, which changes note by note rather than sliding
   peaks.forEach((c, j) => {
-    const kWater = rippleK(c.f / 2) * VIEW_HALF_M;
-    const kPlasma = Math.sqrt(c.f / 12) * 3.5;
-    const q = Math.round(48 * Math.log2(c.f / 440));       // seed per quarter-semitone, so a held note stays still
-    sp[j*4] = kWater; sp[j*4+1] = kPlasma; sp[j*4+2] = c.a / tot; sp[j*4+3] = ((q * 0.61803) % 1 + 1) % 1;
-    if (j === 0) rippleMm = 2*Math.PI / rippleK(c.f / 2) * 1000;
+    const f = j === 0 ? patternHz : c.f;
+    sp[j*4] = rippleK(f / 2) * VIEW_HALF_M;
+    sp[j*4+1] = f < 40 ? 3 : 2;               // hexagons at low drive pitches, squares in the capillary range
+    sp[j*4+2] = c.a / tot; sp[j*4+3] = seedOf(f);
   });
+  rippleMm = 2*Math.PI / rippleK(patternHz / 2) * 1000; rippleKind = patternHz < 40 ? "hexagons" : "squares";
+  zp[0] = Math.sqrt(patternHz / 12) * 3.0;
+  zp[1] = peaks[1] ? Math.sqrt(peaks[1].f / 12) * 3.0 : 0;
+  zp[2] = peaks[1] ? peaks[1].a / (peaks[0].a || 1) : 0;
+  zp[3] = seedOf(patternHz);
 }
 let strength = 2;
 try { const v = +localStorage.getItem("cym-strength"); if (v >= 100 && v <= 400) $("strength").value = v; } catch (e) {}
@@ -865,7 +975,9 @@ new ResizeObserver(resize).observe(cv); resize();
 let colSm = nmToRGB(620), lastHud = 0, negSm = 0, visSm = 0;
 const hud = document.querySelector(".hud"); let waitingGone = false;
 const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+let silentSince = 0;
 function frame(t){
+  gl.useProgram(pr); gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
   analyse();
   // a voice-only word can't be heard by the page, so its known tone drives the pattern directly
   if (voiceSpeaking && seqHz && !(level > 0.01)) { target = seqHz; spec = [{ f: seqHz, a: 1 }]; }
@@ -875,6 +987,8 @@ function frame(t){
   freqSm = Math.exp(Math.log(freqSm) + (Math.log(Math.max(20,target)) - Math.log(freqSm)) * 0.12);
   levelSm += (tgtLevel - levelSm) * 0.15;
   const lit = live || ((seqNodes.length > 0 || voiceOn) && visSm > 0.5);           // stay lit through the short gaps between words
+  if (lit && silentSince && t - silentSince > 1500) { ensureGrains(); sprinkle(); }   // a new sound after a pause: fresh sand
+  silentSince = lit ? 0 : (silentSince || t);
   visSm += ((lit ? 1 : 0) - visSm) * (lit ? 0.14 : 0.05);   // light fades in with the tone, out after it
   // formation: grows while a steady sound plays; a new pitch partly dissolves the figure, which
   // then re-forms; silence lets it melt back so the next sound starts from loose liquid
@@ -906,9 +1020,15 @@ function frame(t){
   const a = Math.sqrt(patternHz/12);   // when the sound stops the figure melts where it is, without moving
   gl.uniform2f(uR, cv.width, cv.height); gl.uniform1f(uT, reduce ? 0 : t/1000);
   gl.uniform1f(uA, a); gl.uniform1f(uL, levelSm); gl.uniform1f(uM, mediumSm); gl.uniform3fv(uC, colSm);
-  plateInfo = plateModel(); waveModel(); gl.uniform4fv(uSP, sp); psSm += (plateInfo.strength - psSm) * 0.15;
-  gl.uniform4fv(uPM, pm); gl.uniform1f(uPN, plateInfo.meanE); gl.uniform1f(uPS, psSm); gl.uniform1f(uPHY, physics ? 1 : 0);
+  plateInfo = plateModel(); waveModel(); gl.uniform4fv(uSP, sp); gl.uniform4fv(uZP, zp); psSm += (plateInfo.strength - psSm) * 0.15;
   gl.drawArrays(gl.TRIANGLES, 0, 3);
+  // sand: rebuild the plate's motion map when the sound changes, bounce the grains, draw them
+  const wSand = Math.max(0, 1 - mediumSm);
+  ensureGrains();
+  const key = physics ? spec.slice(0, 6).map(x => Math.round(x.f*2) + ":" + Math.round(x.a*200)).join(",") : "i" + Math.round(patternHz*10);
+  if (key !== gridKey && t - gridAt > 100) { gridKey = key; gridAt = t; buildGrid(); }
+  if (wSand > 0.01 && lit) stepGrains(levelSm * (physics ? 0.15 + 0.85*psSm : 1));
+  drawGrains(cv.width, cv.height, wSand);
   if (rec) { compose(); }
   if (t - lastHud > 90) {
     if (rec) { const s = Math.floor((performance.now() - recStart) / 1000); $("recTime").textContent = Math.floor(s/60) + ":" + String(s%60).padStart(2, "0"); }
@@ -918,7 +1038,7 @@ function frame(t){
     $("nmOut").textContent = Math.round(L.nm) + " nm"; $("octOut").textContent = L.oct;
     $("sw").style.color = `rgb(${rgb.map(x=>x*255|0)})`;
     const b = plateInfo.best;
-    $("modeOut").textContent = medium === 2 ? `free discharge` : medium ? `ripples ${rippleMm.toFixed(2)} mm`
+    $("modeOut").textContent = medium === 2 ? `hexagonal filaments` : medium ? `${rippleKind} · ripples ${rippleMm.toFixed(2)} mm`
       : physics && b ? `mode (${b.n},${b.m})${b.sg > 0 ? "+" : "−"} ${Math.round(b.f)} Hz · ${Math.round(psSm*100)}% resonant` : `${a.toFixed(1)} · ${(a*0.62+1).toFixed(1)}`;
   }
   requestAnimationFrame(frame);
@@ -940,8 +1060,9 @@ function sizeComp() {
 function renderAt(w, h) {
   const ow = cv.width, oh = cv.height;
   cv.width = w; cv.height = h; gl.viewport(0, 0, w, h);
-  gl.uniform2f(uR, w, h); gl.uniform1f(uSS, Q.ss);
+  gl.useProgram(pr); gl.uniform2f(uR, w, h); gl.uniform1f(uSS, Q.ss);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
+  drawGrains(w, h, Math.max(0, 1 - mediumSm));
   comp.width = w; comp.height = h; compose();
   cv.width = ow; cv.height = oh; gl.viewport(0, 0, ow, oh); gl.uniform2f(uR, ow, oh);
 }
