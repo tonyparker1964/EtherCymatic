@@ -192,6 +192,8 @@ button:disabled { opacity: .45; cursor: default; }
       <div class="swatches" id="swatches" role="group" aria-label="Light colour"></div>
       <div class="swname" id="swName" aria-live="polite"><b>From the pitch</b> · each note glows its own colour</div>
       <label class="check"><input type="checkbox" id="negative"> Negative (invert: dark lines on a light plate)</label>
+      <label class="small" for="strength">Pattern strength <span id="strengthOut">100%</span></label>
+      <input type="range" id="strength" min="100" max="400" step="10" value="200">
       <label class="small" for="bright">Light intensity <span id="brightOut">100%</span></label>
       <input type="range" id="bright" min="50" max="400" step="10" value="100">
       <label class="small" for="vol">Volume <span id="volOut">60%</span></label>
@@ -622,7 +624,8 @@ precision highp float;
 uniform vec2 R; uniform float T, A, L, M, NEG, RAIN, VIS; uniform vec3 C;
 uniform vec4 PM[24]; uniform float PN, PS, PHY;
 uniform float G;
-uniform float BRI;   // light intensity chosen by the viewer (1 = normal)   // formation: 0 = unformed liquid shimmer, 1 = the pattern has fully settled   // real plate: modes (n, m, re, im) per overtone, mean energy, resonance, on/off
+uniform float BRI;
+uniform float STR;   // pattern strength (1 = natural): thicker, denser, brighter lines   // light intensity chosen by the viewer (1 = normal)   // formation: 0 = unformed liquid shimmer, 1 = the pattern has fully settled   // real plate: modes (n, m, re, im) per overtone, mean energy, resonance, on/off
 #define PI 3.14159265
 float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float vnoise(vec2 p){
@@ -690,9 +693,11 @@ void main(){
   float mask = mix(1.0 - smoothstep(0.98, 1.0, max(abs(uv.x), abs(uv.y))), 1.0 - smoothstep(0.97, 1.0, length(uv)), Mc);
   float frame = mix(smoothstep(0.985,1.0,max(abs(uv.x),abs(uv.y))) * (1.0-smoothstep(1.0,1.015,max(abs(uv.x),abs(uv.y)))),
                     smoothstep(0.985,1.0,length(uv)) * (1.0-smoothstep(1.0,1.015,length(uv))), Mc);
-  float e = (0.25 + 0.9*L) * mix(1.0, 0.12 + 0.88*PS, wP*PHY);   // real plate: faint away from resonance
-  float core = exp(-abs(v)*mix(mix(70.0, 45.0, L), mix(7.0, 26.0, PS), wP*PHY));
-  float halo = exp(-abs(v)*7.0)*0.32;
+  // real plate: fainter away from resonance (less so with more strength, as with more sand)
+  float e = (0.25 + 0.9*L) * mix(1.0, mix(clamp(0.25*STR, 0.0, 0.9), 1.0, PS), wP*PHY);
+  float widen = 0.6 + 0.4*STR;
+  float core = exp(-abs(v)*mix(mix(70.0, 45.0, L), mix(7.0, 26.0, PS), wP*PHY) / widen);
+  float halo = exp(-abs(v)*7.0/widen)*0.32*widen;
   // Emergence: light gathers in scattered places first and spreads until the whole figure is lit,
   // the way sand or a liquid surface settles, instead of switching on everywhere at once.
   float seed = fbm(uv*2.3 + 11.0);
@@ -706,7 +711,7 @@ void main(){
     float h = fract(atan(uv.y, uv.x)/(2.0*PI) + length(uv)*0.22 - T*0.03);
     base = clamp(abs(mod(h*6.0 + vec3(0.0,4.0,2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
   }
-  vec3 col = base*(core*1.4 + halo)*e + vec3(1.0)*core*core*0.55*e + base*body;
+  vec3 col = base*(core*1.4*(0.5 + 0.5*STR) + halo)*e + vec3(1.0)*core*core*0.55*e + base*body;
   // the unformed medium: a faint, drifting glimmer that the lines condense out of
   float glim = fbm(wuv*3.1 + vec2(T*0.05, T*0.04));
   col += base * pow(glim, 3.0) * 0.55 * uf * e;
@@ -727,7 +732,12 @@ gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,3,-1,-1,3]), gl.STATIC_DR
 const loc = gl.getAttribLocation(pr, "p"); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
 const U = n => gl.getUniformLocation(pr, n);
 const uR=U("R"), uT=U("T"), uA=U("A"), uL=U("L"), uM=U("M"), uC=U("C"), uN=U("NEG"), uW=U("RAIN"), uV=U("VIS");
-const uBRI=U("BRI");
+const uBRI=U("BRI"), uSTR=U("STR");
+let strength = 2;
+try { const v = +localStorage.getItem("cym-strength"); if (v >= 100 && v <= 400) $("strength").value = v; } catch (e) {}
+function setStrength() { strength = +$("strength").value / 100; $("strengthOut").textContent = $("strength").value + "%"; }
+$("strength").addEventListener("input", () => { setStrength(); try { localStorage.setItem("cym-strength", $("strength").value); } catch (e) {} });
+setStrength();
 let bright = 1;
 try { const b = +localStorage.getItem("cym-bright"); if (b >= 50 && b <= 400) { $("bright").value = b; } } catch (e) {}
 function setBright() { bright = +$("bright").value / 100; $("brightOut").textContent = $("bright").value + "%"; }
@@ -828,7 +838,7 @@ function frame(t){
   const want = chosenRGB(rgb);
   colSm = colSm.map((c,i) => c + (want[i]-c)*0.1);
   negSm += ((negative ? 1 : 0) - negSm) * 0.12;
-  gl.uniform1f(uV, visSm); gl.uniform1f(uBRI, bright);
+  gl.uniform1f(uV, visSm); gl.uniform1f(uBRI, bright); gl.uniform1f(uSTR, strength);
   hud.classList.toggle("quiet", visSm < 0.05);
   if (visSm > 0.05 && !waitingGone) { waitingGone = true; $("waiting").classList.add("gone"); }
   gl.uniform1f(uN, negSm); gl.uniform1f(uW, colour === "rain" ? 1 : 0);
