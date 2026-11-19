@@ -108,13 +108,19 @@ button:disabled { opacity: .45; cursor: default; }
         <button id="speakIn" hidden>Say words</button>
       </div>
       <p class="note" id="dictNote" hidden></p>
-      <label class="small" for="scale">Letter tuning</label>
+      <label class="small" for="playAs">Play as</label>
+      <select id="playAs">
+        <option value="word" selected>One tone per word</option>
+        <option value="phrase">Whole phrase as one tone</option>
+        <option value="letters">Letter by letter (a melody)</option>
+      </select>
+      <label class="small" for="scale">Tuning</label>
       <select id="scale">
         <option value="penta">Pentatonic (always consonant)</option>
-        <option value="chrom">Chromatic (a = C3, one semitone per letter)</option>
+        <option value="chrom">Chromatic (one semitone per step)</option>
         <option value="solf">Solfeggio set (174–963 Hz)</option>
       </select>
-      <label class="small" for="tempo">Letter length <span id="tempoOut">260 ms</span></label>
+      <label class="small" for="tempo" id="tempoLabel">Speed (per letter) <span id="tempoOut">260 ms</span></label>
       <input type="range" id="tempo" min="80" max="900" value="260">
       <label class="check"><input type="checkbox" id="speak"> Also speak the words aloud</label>
       <div class="letters" id="letters" aria-live="polite"></div>
@@ -252,26 +258,52 @@ function stopTone() {
 }
 
 // words → tones
-const PENTA = [0,2,4,7,9];
-function letterHz(ch, scale) {
+// Each letter has a value (a=1 … z=26, digits count as themselves). A letter plays its own step;
+// a word or a whole phrase plays ONE tone: the step at the sum of its letter values.
+const PENTA = [0,2,4,7,9], SOLF = [174,285,396,417,528,639,741,852,963];
+function stepHz(i, scale) {
+  if (scale === "chrom") return 130.81 * Math.pow(2, (i % 36) / 12);          // C3 … B5
+  if (scale === "solf") { const k = i % 18; return SOLF[k % 9] * (k >= 9 ? 2 : 1); }
+  const k = i % 20; return 130.81 * Math.pow(2, (12*Math.floor(k/5) + PENTA[k%5]) / 12); // C3 pentatonic, 4 octaves
+}
+function charValue(ch) {
   const c = ch.toLowerCase();
-  let i = c >= "a" && c <= "z" ? c.charCodeAt(0)-97 : c >= "0" && c <= "9" ? 26 + +c : -1;
-  if (i < 0) return null;
-  if (scale === "chrom") return 130.81 * Math.pow(2, i/12);
-  if (scale === "solf") { const S=[174,285,396,417,528,639,741,852,963]; return S[i%9] * (i>=18?2:1); }
-  const semis = 12*Math.floor(i/5) + PENTA[i%5];           // C4 pentatonic upward
-  return 261.63 * Math.pow(2, semis/12);
+  return c >= "a" && c <= "z" ? c.charCodeAt(0) - 96 : c >= "0" && c <= "9" ? +c : 0;
+}
+const letterHz = (ch, scale) => { const v = charValue(ch); return v ? stepHz(v - 1, scale) : null; };
+function wordSum(w) { return [...w].reduce((s, ch) => s + charValue(ch), 0); }
+const wordHz = (w, scale) => { const s = wordSum(w); return s ? stepHz(s - 1, scale) : null; };
+
+// Turn the text into what gets played: [{text, hz, len (in beats), sum?}]
+function units() {
+  const text = $("words").value, scale = $("scale").value, mode = $("playAs").value;
+  if (mode === "letters") return [...text].map(ch => ({ text: ch === " " ? "␣" : ch, hz: letterHz(ch, scale), len: 1 }));
+  if (mode === "phrase") {
+    const t = text.trim(), n = [...t].filter(charValue).length;
+    return t ? [{ text: t, hz: wordHz(t, scale), len: Math.max(4, n), sum: wordSum(t) }] : [];
+  }
+  const out = [];
+  text.trim().split(/\s+/).filter(Boolean).forEach((w, i) => {
+    if (i) out.push({ text: "", hz: null, len: 1, gap: true });
+    out.push({ text: w, hz: wordHz(w, scale), len: Math.max(2, [...w].filter(charValue).length), sum: wordSum(w) });
+  });
+  return out;
 }
 function renderLetters() {
   const box = $("letters"); box.innerHTML = "";
-  [...$("words").value].forEach(ch => {
-    const s = document.createElement("span"); const f = letterHz(ch, $("scale").value);
-    s.innerHTML = (ch===" " ? "␣" : ch.replace(/[<&>]/g,"")) + "<small>" + (f ? Math.round(f) : "rest") + "</small>";
-    box.appendChild(s);
+  units().forEach(u => {
+    const s = document.createElement("span");
+    if (u.gap) s.hidden = true;
+    s.textContent = u.text;
+    const sm = document.createElement("small");
+    sm.textContent = u.hz ? (u.sum ? `Σ${u.sum} · ` : "") + Math.round(u.hz) + " Hz" : "rest";
+    s.appendChild(sm); box.appendChild(s);
   });
+  $("tempoLabel").firstChild.textContent = $("playAs").value === "letters" ? "Letter length " : "Speed (per letter) ";
 }
 $("words").addEventListener("input", renderLetters);
 $("scale").addEventListener("change", renderLetters);
+$("playAs").addEventListener("change", renderLetters);
 $("tempo").addEventListener("input", e => $("tempoOut").textContent = e.target.value + " ms");
 renderLetters();
 
@@ -284,27 +316,31 @@ function stopWords() {
 $("playWords").onclick = () => {
   audio(); stopWords(); stopTone();
   if (audioEl && !audioEl.paused) audioEl.pause();
-  const text = $("words").value, dur = +$("tempo").value/1000, scale = $("scale").value;
+  const text = $("words").value, beat = +$("tempo").value/1000, us = units(), single = $("playAs").value !== "letters";
   label = text.trim();
   const spans = $("letters").children, t0 = ac.currentTime + 0.08;
-  [...text].forEach((ch, i) => {
-    const f = letterHz(ch, scale), t = t0 + i*dur;
+  let beatAt = 0;
+  us.forEach((u, i) => {
+    const t = t0 + beatAt*beat, dur = u.len*beat; beatAt += u.len;
     seqTimers.push(setTimeout(() => {
       [...spans].forEach(s => s.classList.remove("live")); spans[i] && spans[i].classList.add("live");
-      if (f) target = f;
+      if (u.hz) { target = u.hz; if (single) label = u.text; }
     }, (t - ac.currentTime)*1000));
-    if (!f) return;
-    // a warm voice: fundamental + soft octave, plucked envelope
+    if (!u.hz) return;
+    // letters: plucked; a word or phrase: one held tone with a soft swell so the pattern settles
+    const atk = single ? Math.min(0.08, dur*0.2) : 0.015;
     [[1,"triangle",0.32],[2,"sine",0.08]].forEach(([mult,type,amp]) => {
       const o = ac.createOscillator(), g = ac.createGain();
-      o.type = type; o.frequency.value = f*mult;
-      g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(amp, t+0.015);
-      g.gain.setTargetAtTime(amp*0.55, t+0.02, dur*0.3);
-      g.gain.setTargetAtTime(0, t+dur*0.92, 0.03);
-      o.connect(g).connect(master); o.start(t); o.stop(t+dur+0.2); seqNodes.push(o);
+      o.type = type; o.frequency.value = u.hz*mult;
+      g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(amp, t+atk);
+      g.gain.setTargetAtTime(amp*(single ? 0.8 : 0.55), t+atk, single ? dur*0.5 : dur*0.3);
+      g.gain.setTargetAtTime(0, t+dur*0.92, single ? 0.06 : 0.03);
+      o.connect(g).connect(master); o.start(t); o.stop(t+dur+0.4); seqNodes.push(o);
     });
   });
-  seqTimers.push(setTimeout(() => { [...spans].forEach(s => s.classList.remove("live")); seqNodes = []; },(t0 - ac.currentTime + text.length*dur)*1000 + 200));
+  seqTimers.push(setTimeout(() => {
+    [...spans].forEach(s => s.classList.remove("live")); seqNodes = []; label = text.trim();
+  }, (t0 - ac.currentTime + beatAt*beat)*1000 + 300));
   if ($("speak").checked) { try { const u = new SpeechSynthesisUtterance(text); u.rate = 0.9; speechSynthesis.speak(u); } catch(e){} }
 };
 $("stopAll").onclick = () => { stopWords(); stopTone(); stopMic(); if (audioEl) audioEl.pause(); };

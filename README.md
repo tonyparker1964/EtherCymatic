@@ -7,7 +7,7 @@ A browser app that turns words, tones, songs and your voice into glowing cymatic
 
 ## Features
 
-- Type words: each letter becomes a note (pentatonic, chromatic or solfeggio tuning).
+- Type words: each word plays as one tone (the sum of its letter values picks the pitch), or play the whole phrase as one tone, or letter by letter as a melody. Pentatonic, chromatic or solfeggio tuning.
 - Pure tones from 20 to 2000 Hz, with sine, triangle, square and saw waves.
 - Upload songs as a playlist; the strongest pitch drives the pattern.
 - Live microphone input.
