@@ -30,7 +30,7 @@ html, body { height: 100%; }
 body { background: var(--void); color: var(--ink); font-family: var(--f-ui); font-size: 14px; }
 .app { display: grid; grid-template-columns: minmax(0,1fr) 340px; height: 100%; }
 .stage { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
-canvas { display: block; width: 100%; height: 100%; }
+canvas { display: block; width: 100%; height: 100%; object-fit: contain; }
 .hud { position: absolute; left: max(16px, env(safe-area-inset-left, 0px)); bottom: 16px; display: flex; gap: 18px; flex-wrap: wrap; font-family: var(--f-data); font-size: 12px; color: var(--dim); pointer-events: none; transition: opacity .6s; }
 .hud.quiet { opacity: 0; }
 .waiting { position: absolute; inset: 0; display: grid; place-items: center; color: var(--dim); font-size: 13px; letter-spacing: .08em; pointer-events: none; transition: opacity .6s; }
@@ -173,6 +173,12 @@ button:disabled { opacity: .45; cursor: default; }
         <button id="recBtn">Record</button>
         <button id="recSongBtn" disabled>Record song</button>
       </div>
+      <label class="small" for="quality">Quality</label>
+      <select id="quality">
+        <option value="std">Standard: 720p video, fastest</option>
+        <option value="hd" selected>HD: 1080p images and video</option>
+        <option value="ultra">Ultra 4K: 3840 × 2160, extra detail</option>
+      </select>
       <label class="check"><input type="checkbox" id="caption" checked> Show the word or song title on captures</label>
       <label class="check"><input type="checkbox" id="autoSnap"> Save an image automatically when each word's tone finishes</label>
       <div class="row"><button id="resaveBtn" hidden>Save last recording again</button></div>
@@ -683,8 +689,9 @@ float plasma(vec2 p){
   vec2 q = p + 0.28*(vec2(fbm(p*1.8 + vec2(T*0.9, 0.0)), fbm(p*1.8 + vec2(0.0, -T*0.8) + 4.3)) - 0.5)*(1.0 + L);
   return waveField(q, 1.0);
 }
-void main(){
-  vec2 uv = (gl_FragCoord.xy - 0.5*R) / min(R.x, R.y) * 2.15;
+uniform float SS;   // supersampling: 2 = four samples per pixel for ultra-fine, smooth lines
+vec3 render(vec2 fc){
+  vec2 uv = (fc - 0.5*R) / min(R.x, R.y) * 2.15;
   float a = A, jitter = 0.004*L*sin(T*40.0);
   // Liquid drift: while a pattern is forming the medium flows and the lines wander; once it has
   // settled only a gentle shimmer remains. Nothing is pulled toward the centre.
@@ -712,6 +719,9 @@ void main(){
   float rr = length(uv);
   core *= appear;
   halo *= mix(0.3, 1.0, appear);
+  // individual grains: the sand lines are made of fine, glinting particles (visible at HD and 4K)
+  float grain = hash(floor(uv * 520.0));
+  core *= mix(1.0, 0.45 + 1.1*grain, wP*0.7);
   float body = (0.5+0.5*v)*0.05;
   vec3 base = C;
   if (RAIN > 0.5) {   // rainbow: hue sweeps around the plate and drifts slowly
@@ -730,7 +740,14 @@ void main(){
   col *= BRI;
   col = col/(1.0+col*0.35);          // soft tone-map so bright peaks bloom, not clip
   vec3 o = clamp(pow(col, vec3(0.92)), 0.0, 1.0);
-  gl_FragColor = vec4(mix(o, 1.0 - o, NEG) * VIS, 1.0);   // NEG = 1: photographic negative; VIS = 0: black until sound plays
+  return mix(o, 1.0 - o, NEG) * VIS;   // NEG = 1: photographic negative; VIS = 0: black until sound plays
+}
+void main(){
+  if (SS > 1.5) {
+    vec3 c = render(gl_FragCoord.xy + vec2(-0.25, -0.25)) + render(gl_FragCoord.xy + vec2(0.25, -0.25))
+           + render(gl_FragCoord.xy + vec2(-0.25, 0.25)) + render(gl_FragCoord.xy + vec2(0.25, 0.25));
+    gl_FragColor = vec4(c * 0.25, 1.0);
+  } else gl_FragColor = vec4(render(gl_FragCoord.xy), 1.0);
 }`;
 function sh(t, s){ const o = gl.createShader(t); gl.shaderSource(o, s); gl.compileShader(o); if(!gl.getShaderParameter(o, gl.COMPILE_STATUS)) console.error(gl.getShaderInfoLog(o)); return o; }
 const pr = gl.createProgram(); gl.attachShader(pr, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(pr, sh(gl.FRAGMENT_SHADER, FS)); gl.linkProgram(pr); gl.useProgram(pr);
@@ -825,8 +842,22 @@ function chosenRGB(pitchRGB) {
   const c = COLOURS.find(c => c.id === colour); return nmToRGB(c.nm);
 }
 
+// Quality: how finely the live view is drawn, and the size of saved images and videos.
+const QUALITY = {
+  std:   { dpr: 1, ss: 1, img: 1280, vid: [1280, 720],  bits: 6e6 },
+  hd:    { dpr: 2, ss: 1, img: 1920, vid: [1920, 1080], bits: 14e6 },
+  ultra: { dpr: 2, ss: 2, img: 3840, vid: [3840, 2160], bits: 45e6 },
+};
+let Q = QUALITY.hd, recSize = null;
+try { const qv = localStorage.getItem("cym-quality"); if (QUALITY[qv]) { $("quality").value = qv; Q = QUALITY[qv]; } } catch (e) {}
+$("quality").onchange = e => {
+  Q = QUALITY[e.target.value] || QUALITY.hd; resize();
+  try { localStorage.setItem("cym-quality", e.target.value); } catch (err) {}
+};
+const uSS = U("SS");
 function resize(){
-  const dpr = Math.min(window.devicePixelRatio||1, 2), r = cv.getBoundingClientRect();
+  if (recSize) return;   // while recording, the canvas is held at the video's exact size
+  const dpr = Math.min(window.devicePixelRatio||1, Q.dpr), r = cv.getBoundingClientRect();
   cv.width = Math.max(1, r.width*dpr|0); cv.height = Math.max(1, r.height*dpr|0); gl.viewport(0,0,cv.width,cv.height);
 }
 new ResizeObserver(resize).observe(cv); resize();
@@ -868,6 +899,7 @@ function frame(t){
   colSm = colSm.map((c,i) => c + (want[i]-c)*0.1);
   negSm += ((negative ? 1 : 0) - negSm) * 0.12;
   gl.uniform1f(uV, visSm); gl.uniform1f(uBRI, bright); gl.uniform1f(uSTR, strength);
+  gl.uniform1f(uSS, recSize && recSize[0] > 2000 ? 1 : Q.ss);   // a 4K video is already pixel-dense; skip the extra samples
   hud.classList.toggle("quiet", visSm < 0.05);
   if (visSm > 0.05 && !waitingGone) { waitingGone = true; $("waiting").classList.add("gone"); }
   gl.uniform1f(uN, negSm); gl.uniform1f(uW, colour === "rain" ? 1 : 0);
@@ -900,8 +932,18 @@ let dl = null;
 if (window.claude && claude.use) claude.use("downloads").then(d => { dl = d; }).catch(() => {});
 
 function sizeComp() {
-  const s = Math.min(1, 1920 / Math.max(cv.width, cv.height));
-  comp.width = Math.max(2, Math.round(cv.width * s / 2) * 2); comp.height = Math.max(2, Math.round(cv.height * s / 2) * 2);
+  if (recSize) { comp.width = recSize[0]; comp.height = recSize[1]; return; }
+  comp.width = cv.width; comp.height = cv.height;
+}
+// Draw one frame straight into a canvas of exactly w × h (for full-resolution stills), then put the
+// live view back. The pattern is computed fresh at that size, not enlarged from the screen.
+function renderAt(w, h) {
+  const ow = cv.width, oh = cv.height;
+  cv.width = w; cv.height = h; gl.viewport(0, 0, w, h);
+  gl.uniform2f(uR, w, h); gl.uniform1f(uSS, Q.ss);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  comp.width = w; comp.height = h; compose();
+  cv.width = ow; cv.height = oh; gl.viewport(0, 0, ow, oh); gl.uniform2f(uR, ow, oh);
 }
 function compose() {
   const W = comp.width, H = comp.height, u = Math.min(W, H) / 100, pad = u * 5;
@@ -949,7 +991,9 @@ async function saveFile(name, blob) {
 const still = document.createElement("canvas"), sx = still.getContext("2d");
 let saveQueue = Promise.resolve(), snapCount = 0;
 function snapStill(auto) {
-  sizeComp(); compose();
+  // stills: the quality's long side at 16:9 (3840 × 2160 for Ultra 4K)
+  if (recSize) { sizeComp(); compose(); }
+  else renderAt(Q.img, Math.round(Q.img * 9 / 16));
   still.width = comp.width; still.height = comp.height; sx.drawImage(comp, 0, 0);
   const name = `${slug()}-${stamp()}-${String(++snapCount).padStart(2, "0")}.png`;
   still.toBlob(b => {
@@ -969,24 +1013,26 @@ try { $("autoSnap").checked = localStorage.getItem("cym-autosnap") === "1"; } ca
 let rec = null, recChunks = [], recStart = 0, lastRec = null;
 function pickMime() {
   if (!window.MediaRecorder) return null;
-  return ["video/mp4;codecs=avc1.42E01E,mp4a.40.2", "video/mp4", "video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm"]
+  return ["video/mp4;codecs=avc1.640033,mp4a.40.2", "video/mp4;codecs=avc1.640028,mp4a.40.2", "video/mp4;codecs=avc1.42E01E,mp4a.40.2", "video/mp4", "video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm"]
     .find(m => MediaRecorder.isTypeSupported(m)) || "";
 }
 function startRecording() {
   const mime = pickMime();
   if (mime === null || !comp.captureStream) { capNote("This browser can't record video. Try Chrome, Edge or Safari."); return false; }
-  audio(); sizeComp(); compose();
+  audio();
+  recSize = Q.vid.slice(); cv.width = recSize[0]; cv.height = recSize[1]; gl.viewport(0, 0, recSize[0], recSize[1]);
+  sizeComp(); compose();
   const stream = new MediaStream([...comp.captureStream(30).getVideoTracks(), ...recDest.stream.getAudioTracks()]);
   let r;
-  try { r = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 8e6 } : {}); }
-  catch (e) { capNote("Recording couldn't start in this browser."); return false; }
+  try { r = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: Q.bits } : { videoBitsPerSecond: Q.bits }); }
+  catch (e) { recSize = null; resize(); capNote("Recording couldn't start in this browser at this quality. Try HD."); return false; }
   recChunks = [];
   r.ondataavailable = e => { if (e.data && e.data.size) recChunks.push(e.data); };
   r.onstop = () => {
     const type = r.mimeType || mime || "video/webm", ext = type.includes("mp4") ? "mp4" : "webm";
     stream.getVideoTracks().forEach(t => t.stop());
     lastRec = { name: `${slug()}-${stamp()}.${ext}`, blob: new Blob(recChunks, { type }) };
-    rec = null; $("recDot").hidden = true;
+    rec = null; recSize = null; resize(); $("recDot").hidden = true;
     $("recBtn").textContent = "Record"; $("recBtn").classList.remove("rec-on");
     $("recSongBtn").textContent = "Record song"; $("recSongBtn").classList.remove("rec-on");
     $("resaveBtn").hidden = false;

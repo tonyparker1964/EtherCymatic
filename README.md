@@ -15,6 +15,7 @@ A browser app that turns words, tones, songs and your voice into glowing cymatic
 - Real plate physics (on by default): an ideal 30 cm × 1 mm brass plate whose modes resonate at f = 18.1 Hz × (n² + m²). Every overtone in the sound drives the plate, so a sine and a square wave look different, and sand only settles clearly near resonant pitches.
 - Three looks, all free-forming: sand on a vibrating plate (Chladni patterns), water (capillary ripples on a liquid surface, driven at half the pitch as Faraday waves, wavelength from the real ripple dispersion relation), and plasma (the same kind of wave field, bent and torn by moving charge).
 - Colour from the sound's pitch raised by whole octaves into visible light, or pick any spectrum colour, rainbow, white on black, or a black-on-white negative.
+- Quality: Standard (720p), HD (1080p) or Ultra 4K (3840 × 2160, with 4× supersampling and individual sand grains). Images and videos are rendered at that size, not enlarged from the screen.
 - Save still images (or have one saved automatically as each word's tone finishes) and record video with sound.
 
 ## Files
