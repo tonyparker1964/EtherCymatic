@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="About Ether's Cymatic: a browser app that turns words, tones, songs and your voice into glowing cymatic light patterns.">
+<title>About Ether's Cymatic</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one calm reading column on the same dark ground as the app; a single glowing plate figure opens the page. */
+:root {
+  --void: #05060a;
+  --panel: #0c0e15;
+  --line: #1d2130;
+  --ink: #e7e9f2;
+  --dim: #8a90a8;
+  --glow: #9fe3ff;
+  --f-ui: "Sora", ui-sans-serif, system-ui, sans-serif;
+  --f-data: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  color-scheme: dark;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--void); color: var(--ink); font: 16px/1.65 var(--f-ui); }
+.wrap { max-width: 720px; margin: 0 auto; padding-block: 48px 72px; padding-left: max(20px, env(safe-area-inset-left, 0px)); padding-right: max(20px, env(safe-area-inset-right, 0px)); display: flex; flex-direction: column; gap: 40px; }
+header { display: flex; flex-direction: column; gap: 18px; }
+.eyebrow { font-size: 12px; letter-spacing: .32em; text-transform: uppercase; color: var(--dim); font-weight: 300; }
+h1 { margin: 0; font-size: clamp(36px, 7vw, 56px); line-height: 1.05; font-weight: 600; letter-spacing: -0.02em; text-wrap: balance; }
+h2 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: .18em; text-transform: uppercase; color: var(--dim); }
+p { margin: 0; max-width: 62ch; }
+.lead { font-size: 19px; color: var(--ink); font-weight: 300; }
+section { display: flex; flex-direction: column; gap: 14px; }
+canvas { width: 100%; max-width: 100%; aspect-ratio: 16 / 7; display: block; border-radius: 10px; border: 1px solid var(--line); background: var(--void); }
+.cta { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+.btn { display: inline-block; text-decoration: none; font-weight: 600; padding: 12px 20px; border-radius: 8px; background: var(--ink); color: var(--void); }
+.btn:hover { background: var(--glow); }
+.url { font-family: var(--f-data); font-size: 13px; color: var(--dim); word-break: break-all; }
+a { color: var(--glow); }
+a:focus-visible { outline: 2px solid var(--glow); outline-offset: 3px; }
+ul { margin: 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: 8px; max-width: 62ch; }
+.steps { list-style: none; padding: 0; counter-reset: s; gap: 16px; }
+.steps li { counter-increment: s; display: grid; grid-template-columns: 34px minmax(0,1fr); gap: 12px; }
+.steps li::before { content: counter(s); font-family: var(--f-data); color: var(--glow); border: 1px solid var(--line); border-radius: 50%; width: 30px; height: 30px; display: grid; place-items: center; font-size: 13px; }
+.formula { font-family: var(--f-data); font-size: 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; overflow-x: auto; white-space: nowrap; }
+footer { color: var(--dim); font-size: 13px; border-top: 1px solid var(--line); padding-top: 20px; }
+@media (prefers-reduced-motion: reduce) { canvas { animation: none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Ether's Cymatic</div>
+    <h1>Sound you can see as light</h1>
+    <p class="lead">Ether's Cymatic is a browser app that turns words, tones, songs and your own voice into glowing cymatic patterns, the shapes sand makes on a vibrating plate and ripples make in a vibrating dish of water.</p>
+    <div class="cta">
+      <a class="btn" href="index.html">Open the app</a>
+      <span class="url">tonyparker1964.github.io/Ether-s-Cymatic</span>
+    </div>
+  </header>
+
+  <canvas id="plate" aria-label="A slowly changing cymatic pattern drawn as glowing lines"></canvas>
+
+  <section>
+    <h2>What you can do</h2>
+    <ul>
+      <li><strong>Type words and hear them.</strong> Every letter becomes a note, and each note reshapes the pattern as it plays.</li>
+      <li><strong>Play pure tones</strong> from 20 to 2000 Hz, with quick picks such as 432, 440 and 528 Hz.</li>
+      <li><strong>Upload songs</strong> and watch the strongest pitch in the music drive the pattern, with loudness setting the brightness.</li>
+      <li><strong>Use your microphone.</strong> Sing, hum or play an instrument and the light follows you.</li>
+      <li><strong>Save a still image</strong> of a word's pattern, captioned with the word, its frequency and its colour.</li>
+      <li><strong>Record video</strong> of a whole song with its sound, ready to share.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>How it works</h2>
+    <ol class="steps">
+      <li><p><strong>Listen.</strong> The browser's audio engine plays the sound and measures its strongest pitch and its loudness about sixty times a second.</p></li>
+      <li><p><strong>Vibrate.</strong> A square plate vibrating at a pitch has lines that stay still while the rest moves. Sand gathers on those lines. Higher pitches give more, finer lines. The app solves the plate's standing-wave pattern for the current pitch and draws the still lines as light.</p></li>
+      <li><p><strong>Colour.</strong> The pitch is doubled, octave by octave, until it reaches the frequency of visible light. That light's wavelength sets the colour, so a given note always glows the same colour.</p></li>
+    </ol>
+    <div class="formula">A4 = 440 Hz × 2⁴⁰ ≈ 484 THz ≈ 620 nm (orange-red)</div>
+  </section>
+
+  <section>
+    <h2>Good to know</h2>
+    <ul>
+      <li>Everything runs in your browser. Songs, your voice and your captures never leave your device.</li>
+      <li>Sound starts only after you press a button. That's a browser rule.</li>
+      <li>Recording works best in Chrome, Edge or Safari. You'll get an MP4 or a WebM depending on the browser.</li>
+      <li>The microphone needs your permission the first time you use it.</li>
+    </ul>
+  </section>
+
+  <footer>
+    <a href="index.html">Open Ether's Cymatic</a> · <a href="https://github.com/tonyparker1964/Ether-s-Cymatic">Source on GitHub</a>
+  </footer>
+</div>
+
+<script>
+// A small, slow version of the app's sand-plate pattern, drawn on a 2D canvas.
+(() => {
+  const c = document.getElementById("plate"), x = c.getContext("2d");
+  const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let w, h, img;
+  function size() {
+    const r = c.getBoundingClientRect(), s = Math.min(devicePixelRatio || 1, 1.5) * 0.5;
+    w = c.width = Math.max(2, r.width * s | 0); h = c.height = Math.max(2, r.height * s | 0);
+    img = x.createImageData(w, h);
+  }
+  new ResizeObserver(size).observe(c); size();
+  function draw(t) {
+    const a = 4.2 + 1.6 * Math.sin(t / 7000), m = a * 0.62 + 1, mix = 0.5 + 0.5 * Math.sin(a * 2.1);
+    const d = img.data, sc = 2 / Math.min(w, h), P = Math.PI;
+    for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
+      const px = (i - w / 2) * sc * 0.55, py = (j - h / 2) * sc * 0.55;
+      const A = Math.cos(P*a*px)*Math.cos(P*m*py), B = Math.cos(P*m*px)*Math.cos(P*a*py);
+      const v = Math.abs((A - B) * (1 - mix) + (A + B) * mix);
+      const g = Math.exp(-v * 40) * 1.3 + Math.exp(-v * 6) * 0.3;
+      const k = (j * w + i) * 4;
+      d[k] = Math.min(255, 159 * g + 40 * g * g); d[k+1] = Math.min(255, 227 * g); d[k+2] = Math.min(255, 255 * g); d[k+3] = 255;
+    }
+    x.putImageData(img, 0, 0);
+    if (!still) requestAnimationFrame(draw);
+  }
+  requestAnimationFrame(draw);
+})();
+</script>
+</body>
+</html>
