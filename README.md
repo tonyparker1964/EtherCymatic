@@ -8,6 +8,7 @@ A browser app that turns words, tones, songs and your voice into glowing cymatic
 ## Features
 
 - Type words: each word plays as one tone. In Exact tuning every word gets its own precise pitch (anagrams too); musical tunings (pentatonic, chromatic, solfeggio) pick a note from the sum of the letter values, so words can share tones. Or play the whole phrase as one tone, or letter by letter as a melody.
+- Words can sound as a tone, as a spoken word (the browser's voice; the pattern follows the word's exact tone), or spoken over their tone.
 - Pure tones from 20 to 2000 Hz, with sine, triangle, square and saw waves.
 - Upload songs as a playlist; the strongest pitch drives the pattern.
 - Live microphone input.

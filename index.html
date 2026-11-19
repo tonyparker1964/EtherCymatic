@@ -128,7 +128,13 @@ button:disabled { opacity: .45; cursor: default; }
       </select>
       <label class="small" for="tempo" id="tempoLabel">Speed (per letter) <span id="tempoOut">260 ms</span></label>
       <input type="range" id="tempo" min="80" max="900" value="260">
-      <label class="check"><input type="checkbox" id="speak"> Also speak the words aloud</label>
+      <label class="small" for="voiceMode">Sound of the words</label>
+      <select id="voiceMode">
+        <option value="tone" selected>Tone</option>
+        <option value="voice">Spoken word</option>
+        <option value="both">Spoken word with its tone</option>
+      </select>
+      <p class="note" id="voiceNote" hidden></p>
       <div class="letters" id="letters" aria-live="polite"></div>
     </section>
 
@@ -327,7 +333,67 @@ $("playAs").addEventListener("change", renderLetters);
 $("tempo").addEventListener("input", e => $("tempoOut").textContent = e.target.value + " ms");
 renderLetters();
 
+// ---- spoken words ----
+// The browser's own voice speaks each word (or letter, or the whole phrase). A web page can't
+// listen to that voice directly, so the pattern is driven by the word's exact tone, which is
+// identical to the tone mode; with "Spoken word with its tone" that tone also sounds under the voice.
+let voiceOn = false, voiceSpeaking = false, voiceGen = 0;
+const canSpeak = "speechSynthesis" in window && "SpeechSynthesisUtterance" in window;
+if (!canSpeak) {
+  [...$("voiceMode").options].forEach(o => { if (o.value !== "tone") o.disabled = true; });
+  $("voiceNote").hidden = false; $("voiceNote").textContent = "This browser has no speaking voice, so words play as tones.";
+}
+$("voiceMode").addEventListener("change", e => {
+  const n = $("voiceNote");
+  n.hidden = e.target.value === "tone";
+  n.textContent = e.target.value === "voice"
+    ? "The voice is spoken by your browser. The pattern follows each word's exact tone, the same one the Tone option plays."
+    : "Each word is spoken over its own held tone, and the pattern follows that tone.";
+});
+function heldTone(hz) {
+  const nodes = [];
+  [[1, "triangle", 0.22], [2, "sine", 0.05]].forEach(([mult, type, amp]) => {
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = type; o.frequency.value = hz * mult;
+    g.gain.setValueAtTime(0, ac.currentTime); g.gain.linearRampToValueAtTime(amp, ac.currentTime + 0.08);
+    o.connect(g).connect(master); o.start(); nodes.push({ o, g }); seqNodes.push(o);
+  });
+  return () => nodes.forEach(({ o, g }) => { g.gain.setTargetAtTime(0, ac.currentTime, 0.06); try { o.stop(ac.currentTime + 0.4); } catch (e) {} });
+}
+function speakUnits(us, single, withTone) {
+  const spans = $("letters").children, rate = Math.max(0.5, Math.min(1.6, 0.9 * 260 / +$("tempo").value));
+  const items = us.map((u, i) => ({ u, i })).filter(x => x.u.hz && !x.u.gap);
+  if (!items.length) return;
+  try { speechSynthesis.cancel(); } catch (e) {}
+  const gen = ++voiceGen;   // callbacks from an earlier, cancelled run are ignored
+  voiceOn = true;
+  items.forEach(({ u, i }, k) => {
+    const ut = new SpeechSynthesisUtterance(u.text === "␣" ? " " : u.text);
+    ut.rate = rate;
+    let release = null;
+    ut.onstart = () => {
+      if (gen !== voiceGen) return;
+      [...spans].forEach(s => s.classList.remove("live")); spans[i] && spans[i].classList.add("live");
+      target = u.hz; seqHz = u.hz; voiceSpeaking = true; if (single) label = u.text;
+      if (withTone) release = heldTone(u.hz);
+    };
+    const done = () => {
+      if (gen !== voiceGen) { if (release) { release(); release = null; } return; }
+      voiceSpeaking = false;
+      if (release) { release(); release = null; }
+      if ($("autoSnap").checked && (single || k === items.length - 1)) { if (!single) label = $("words").value.trim(); snapStill(true); }
+      if (k === items.length - 1) {
+        voiceOn = false; seqHz = null; seqNodes = [];
+        [...spans].forEach(s => s.classList.remove("live")); label = $("words").value.trim();
+      }
+    };
+    ut.onend = done;
+    ut.onerror = e => { if (e.error !== "interrupted" && e.error !== "canceled") { $("voiceNote").hidden = false; $("voiceNote").textContent = "The browser's voice stopped unexpectedly. Try Tone instead."; } done(); };
+    speechSynthesis.speak(ut);
+  });
+}
 function stopWords() {
+  voiceOn = false; voiceSpeaking = false; voiceGen++;
   seqNodes.forEach(n => { try { n.stop(); } catch(e){} }); seqNodes = []; seqHz = null;
   seqTimers.forEach(clearTimeout); seqTimers = [];
   document.querySelectorAll(".letters span.live").forEach(s => s.classList.remove("live"));
@@ -338,6 +404,7 @@ $("playWords").onclick = () => {
   if (audioEl && !audioEl.paused) audioEl.pause();
   const text = $("words").value, beat = +$("tempo").value/1000, us = units(), single = $("playAs").value !== "letters";
   label = text.trim();
+  if ($("voiceMode").value !== "tone") { speakUnits(us, single, $("voiceMode").value === "both"); return; }
   const spans = $("letters").children, t0 = ac.currentTime + 0.08;
   let beatAt = 0;
   us.forEach((u, i) => {
@@ -367,7 +434,6 @@ $("playWords").onclick = () => {
   seqTimers.push(setTimeout(() => {
     [...spans].forEach(s => s.classList.remove("live")); seqNodes = []; seqHz = null; label = text.trim();
   }, (t0 - ac.currentTime + beatAt*beat)*1000 + 300));
-  if ($("speak").checked) { try { const u = new SpeechSynthesisUtterance(text); u.rate = 0.9; speechSynthesis.speak(u); } catch(e){} }
 };
 $("stopAll").onclick = () => { stopWords(); stopTone(); stopMic(); if (audioEl) audioEl.pause(); };
 
@@ -472,7 +538,7 @@ $("speakIn").onclick = () => {
   });
 };
 
-const anySound = () => !!micStream || !!toneOsc ||seqNodes.length > 0 || (audioEl && !audioEl.paused);
+const anySound = () => !!micStream || !!toneOsc || seqNodes.length > 0 || voiceOn || (audioEl && !audioEl.paused);
 
 // ---------- analysis ----------
 let target = 440, freqSm = 440, level = 0.18, levelSm = 0.18, mediumSm = 0, seqHz = null;
@@ -717,12 +783,14 @@ const hud = document.querySelector(".hud"); let waitingGone = false;
 const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
 function frame(t){
   analyse();
-  const live = anySound() && level > 0.01;
-  const tgtLevel = live ? Math.max(0.25, level) : 0.18;
+  // a voice-only word can't be heard by the page, so its known tone drives the pattern directly
+  if (voiceSpeaking && seqHz && !(level > 0.01)) { target = seqHz; spec = [{ f: seqHz, a: 1 }]; }
+  const live = (anySound() && level > 0.01) || voiceSpeaking;
+  const tgtLevel = live ? Math.max(voiceSpeaking ? 0.55 : 0.25, level) : 0.18;
   if (!live && !anySound()) { target = toneHz; spec = [{ f: toneHz, a: 1 }]; }
   freqSm = Math.exp(Math.log(freqSm) + (Math.log(Math.max(20,target)) - Math.log(freqSm)) * 0.12);
   levelSm += (tgtLevel - levelSm) * 0.15;
-  const lit = live || (seqNodes.length > 0 && visSm > 0.5);           // stay lit through the short gaps between words
+  const lit = live || ((seqNodes.length > 0 || voiceOn) && visSm > 0.5);           // stay lit through the short gaps between words
   visSm += ((lit ? 1 : 0) - visSm) * (lit ? 0.14 : 0.05);   // light fades in with the tone, out after it
   // formation: grows while a steady sound plays; a new pitch partly dissolves the figure, which
   // then re-forms; silence lets it melt back so the next sound starts from loose liquid
