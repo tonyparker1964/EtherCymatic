@@ -53,7 +53,8 @@ input[type=range] { width: 100%; accent-color: var(--glow); }
 input[type=text] { width: 100%; }
 label.small { font-size: 12px; color: var(--dim); display: flex; justify-content: space-between; }
 label.small span { font-family: var(--f-data); color: var(--ink); }
-.seg { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.seg { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 6px; }
+.seg button { padding: 8px 6px; font-size: 13px; }
 .letters { display: flex; flex-wrap: wrap; gap: 4px; min-height: 30px; font-family: var(--f-data); }
 .letters span { padding: 4px 6px; border-radius: 4px; background: #141826; color: var(--dim); font-size: 12px; transition: background .1s, color .1s; }
 .letters span small { display: block; font-size: 9px; opacity: .7; }
@@ -98,7 +99,7 @@ button:disabled { opacity: .45; cursor: default; }
       <div>sound<b id="hzOut">440.0 Hz</b></div>
       <div>note<b id="noteOut">A4</b></div>
       <div>as light (+<span id="octOut">40</span> oct)<b><span class="swatch" id="sw"></span><span id="nmOut">620 nm</span></b></div>
-      <div>plate mode<b id="modeOut">6.1 · 4.3</b></div>
+      <div>pattern<b id="modeOut">6.1 · 4.3</b></div>
     </div>
   </div>
 
@@ -174,8 +175,9 @@ button:disabled { opacity: .45; cursor: default; }
     <section>
       <h2>Medium</h2>
       <div class="seg">
-        <button id="mPlate" class="on">Sand on a plate</button>
-        <button id="mWater">Water in a dish</button>
+        <button id="mPlate" class="on">Sand</button>
+        <button id="mWater">Water</button>
+        <button id="mPlasma">Plasma</button>
       </div>
       <h2 style="margin-top:8px">Colour</h2>
       <div class="swatches" id="swatches" role="group" aria-label="Light colour"></div>
@@ -396,8 +398,8 @@ $("vol").addEventListener("input", e => { $("volOut").textContent = e.target.val
 
 // medium
 let medium = 0;
-$("mPlate").onclick = () => { medium = 0; $("mPlate").classList.add("on"); $("mWater").classList.remove("on"); };
-$("mWater").onclick = () => { medium = 1; $("mWater").classList.add("on"); $("mPlate").classList.remove("on"); };
+const MEDIA = ["mPlate", "mWater", "mPlasma"], MEDIUM_NAMES = ["sand plate", "water", "plasma"];
+MEDIA.forEach((id, i) => $(id).onclick = () => { medium = i; MEDIA.forEach((m, j) => $(m).classList.toggle("on", j === i)); });
 
 // live microphone
 let micStream = null, micSrc = null;
@@ -503,15 +505,27 @@ float water(vec2 p, float a){
   float v = mix(ring(p, floor(N), k), ring(p, floor(N)+1.0, k), smoothstep(0.0,1.0,f));
   return v*0.75 + 0.25*cos(k*r*1.3 - T*1.5);
 }
+// plasma: writhing filaments from a bright core, like a plasma globe; the pitch sets how many
+float plasma(vec2 p, float a){
+  float r = length(p), th = atan(p.y, p.x);
+  float N = floor(3.0 + mod(a*1.3, 9.0)), k = a*2.2;
+  float w = th + 0.45*r*sin(k*r*0.7 - T*(1.2 + 2.5*L) + th*2.0) + 0.15*sin(T*0.7 + r*5.0);
+  float fil = sin(N*w) * (0.35 + r);
+  float shell = cos(k*r*1.6 - T*(2.0 + 3.0*L));
+  return fil * (0.6 + 0.4*shell);
+}
 void main(){
   vec2 uv = (gl_FragCoord.xy - 0.5*R) / min(R.x, R.y) * 2.15;
   float a = A, jitter = 0.004*L*sin(T*40.0);
   float vp = plate(uv*0.5+0.0 + jitter, a);
   float vw = water(uv*0.95, a);
-  float v = mix(vp, vw, M);
-  float mask = mix(1.0 - smoothstep(0.98, 1.0, max(abs(uv.x), abs(uv.y))), 1.0 - smoothstep(0.97, 1.0, length(uv)), M);
+  float vz = plasma(uv*0.95, a);
+  float wP = clamp(1.0 - M, 0.0, 1.0), wW = clamp(1.0 - abs(M - 1.0), 0.0, 1.0), wZ = clamp(M - 1.0, 0.0, 1.0);
+  float v = vp*wP + vw*wW + vz*wZ;
+  float Mc = clamp(M, 0.0, 1.0);
+  float mask = mix(1.0 - smoothstep(0.98, 1.0, max(abs(uv.x), abs(uv.y))), 1.0 - smoothstep(0.97, 1.0, length(uv)), Mc);
   float frame = mix(smoothstep(0.985,1.0,max(abs(uv.x),abs(uv.y))) * (1.0-smoothstep(1.0,1.015,max(abs(uv.x),abs(uv.y)))),
-                    smoothstep(0.985,1.0,length(uv)) * (1.0-smoothstep(1.0,1.015,length(uv))), M);
+                    smoothstep(0.985,1.0,length(uv)) * (1.0-smoothstep(1.0,1.015,length(uv))), Mc);
   float e = 0.25 + 0.9*L;
   float core = exp(-abs(v)*mix(70.0, 45.0, L));
   float halo = exp(-abs(v)*7.0)*0.32;
@@ -522,6 +536,8 @@ void main(){
     base = clamp(abs(mod(h*6.0 + vec3(0.0,4.0,2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
   }
   vec3 col = base*(core*1.4 + halo)*e + vec3(1.0)*core*core*0.55*e + base*body;
+  float rr = length(uv);   // plasma core: a hot centre the filaments grow from
+  col += (base*exp(-rr*4.5)*0.9 + vec3(1.0)*exp(-rr*14.0)*0.8) * e * wZ;
   col *= mask;
   col += base*frame*0.25;
   float vig = 1.0 - 0.35*dot(uv,uv)/4.0;
@@ -619,7 +635,8 @@ function frame(t){
     $("noteOut").textContent = noteName(freqSm);
     $("nmOut").textContent = Math.round(L.nm) + " nm"; $("octOut").textContent = L.oct;
     $("sw").style.color = `rgb(${rgb.map(x=>x*255|0)})`;
-    $("modeOut").textContent = medium ? `${Math.floor(3 + (a*1.3)%9)}-fold` : `${a.toFixed(1)} · ${(a*0.62+1).toFixed(1)}`;
+    const fold = Math.floor(3 + (a*1.3)%9);
+    $("modeOut").textContent = medium === 2 ? `${fold*2} filaments` : medium ? `${fold}-fold` : `${a.toFixed(1)} · ${(a*0.62+1).toFixed(1)}`;
   }
   requestAnimationFrame(frame);
 }
@@ -655,7 +672,7 @@ function compose() {
   const L = soundToLight(freqSm), rgb = colSm.map(x => x * 255 | 0);
   cx.font = `400 ${u * 2.6}px "JetBrains Mono", ui-monospace, monospace`;
   cx.fillStyle = negative || colour === "rain" || colour === "white" ? ink : `rgb(${rgb})`;
-  cx.fillText(`${freqSm.toFixed(1)} Hz · ${noteName(freqSm)} · ${Math.round(L.nm)} nm · ${medium ? "water" : "sand plate"}`, pad, H - pad);
+  cx.fillText(`${freqSm.toFixed(1)} Hz · ${noteName(freqSm)} · ${Math.round(L.nm)} nm · ${MEDIUM_NAMES[medium]}`, pad, H - pad);
 }
 const slug = () => (label || "cymatic").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "cymatic";
 const stamp = () => { const d = new Date(), p = n => String(n).padStart(2, "0"); return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`; };
