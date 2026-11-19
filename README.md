@@ -12,7 +12,7 @@ A browser app that turns words, tones, songs and your voice into glowing cymatic
 - Upload songs as a playlist; the strongest pitch drives the pattern.
 - Live microphone input.
 - Two looks: sand on a vibrating plate (Chladni patterns) and water in a dish.
-- Colour from the sound's pitch raised by whole octaves into visible light.
+- Colour from the sound's pitch raised by whole octaves into visible light, or pick any spectrum colour, rainbow, white on black, or a black-on-white negative.
 - Save still images and record video with sound.
 
 ## Files

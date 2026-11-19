@@ -64,6 +64,16 @@ button:disabled { opacity: .45; cursor: default; }
 .playlist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .playlist button { width: 100%; text-align: left; padding: 6px 10px; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .playlist button.cur { border-color: var(--glow); color: var(--glow); }
+.swatches { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
+.sw { aspect-ratio: 1; width: 100%; padding: 0; border-radius: 50%; border: 2px solid var(--line); position: relative; }
+.sw.sel { border-color: var(--ink); box-shadow: 0 0 0 2px var(--void), 0 0 0 4px var(--ink); }
+.sw.auto { background: conic-gradient(#f33, #fb3, #ff3, #3f6, #3ef, #36f, #a3f, #f33); }
+.sw.auto::after { content: "♪"; position: absolute; inset: 0; display: grid; place-items: center; color: #05060a; font-size: 14px; font-weight: 600; }
+.sw.rain { background: conic-gradient(from 90deg, #f33, #ff3, #3f6, #3ef, #36f, #f3f, #f33); }
+.sw.white { background: radial-gradient(circle, #fff 0 38%, #05060a 40%); }
+.sw.neg { background: radial-gradient(circle, #05060a 0 38%, #fff 40%); }
+.swname { font-size: 12px; color: var(--dim); }
+.swname b { color: var(--ink); font-weight: 600; }
 .rack a { color: var(--glow); }
 .check { display: flex; gap: 8px; align-items: center; font-size: 12px; color: var(--dim); }
 @media (max-width: 760px) {
@@ -156,6 +166,10 @@ button:disabled { opacity: .45; cursor: default; }
         <button id="mPlate" class="on">Sand on a plate</button>
         <button id="mWater">Water in a dish</button>
       </div>
+      <h2 style="margin-top:8px">Colour</h2>
+      <div class="swatches" id="swatches" role="group" aria-label="Light colour"></div>
+      <div class="swname" id="swName" aria-live="polite"><b>From the pitch</b> · each note glows its own colour</div>
+      <label class="check"><input type="checkbox" id="negative"> Negative (invert: dark lines on a light plate)</label>
       <label class="small" for="vol">Volume <span id="volOut">60%</span></label>
       <input type="range" id="vol" min="0" max="100" value="60">
     </section>
@@ -421,7 +435,7 @@ const cv = $("gl"), gl = cv.getContext("webgl", { antialias: false, premultiplie
 const VS = "attribute vec2 p;void main(){gl_Position=vec4(p,0,1);}";
 const FS = `
 precision highp float;
-uniform vec2 R; uniform float T, A, L, M; uniform vec3 C;
+uniform vec2 R; uniform float T, A, L, M, NEG, RAIN; uniform vec3 C;
 #define PI 3.14159265
 float plate(vec2 p, float a){
   float n = a, m = a*0.62 + 1.0;
@@ -455,13 +469,19 @@ void main(){
   float core = exp(-abs(v)*mix(70.0, 45.0, L));
   float halo = exp(-abs(v)*7.0)*0.32;
   float body = (0.5+0.5*v)*0.05;
-  vec3 col = C*(core*1.4 + halo)*e + vec3(1.0)*core*core*0.55*e + C*body;
+  vec3 base = C;
+  if (RAIN > 0.5) {   // rainbow: hue sweeps around the plate and drifts slowly
+    float h = fract(atan(uv.y, uv.x)/(2.0*PI) + length(uv)*0.22 - T*0.03);
+    base = clamp(abs(mod(h*6.0 + vec3(0.0,4.0,2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
+  }
+  vec3 col = base*(core*1.4 + halo)*e + vec3(1.0)*core*core*0.55*e + base*body;
   col *= mask;
-  col += C*frame*0.25;
+  col += base*frame*0.25;
   float vig = 1.0 - 0.35*dot(uv,uv)/4.0;
   col *= vig;
   col = col/(1.0+col*0.35);          // soft tone-map so bright peaks bloom, not clip
-  gl_FragColor = vec4(pow(col, vec3(0.92)), 1.0);
+  vec3 o = clamp(pow(col, vec3(0.92)), 0.0, 1.0);
+  gl_FragColor = vec4(mix(o, 1.0 - o, NEG), 1.0);   // NEG = 1: photographic negative
 }`;
 function sh(t, s){ const o = gl.createShader(t); gl.shaderSource(o, s); gl.compileShader(o); if(!gl.getShaderParameter(o, gl.COMPILE_STATUS)) console.error(gl.getShaderInfoLog(o)); return o; }
 const pr = gl.createProgram(); gl.attachShader(pr, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(pr, sh(gl.FRAGMENT_SHADER, FS)); gl.linkProgram(pr); gl.useProgram(pr);
@@ -469,7 +489,49 @@ gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
 gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,3,-1,-1,3]), gl.STATIC_DRAW);
 const loc = gl.getAttribLocation(pr, "p"); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
 const U = n => gl.getUniformLocation(pr, n);
-const uR=U("R"), uT=U("T"), uA=U("A"), uL=U("L"), uM=U("M"), uC=U("C");
+const uR=U("R"), uT=U("T"), uA=U("A"), uL=U("L"), uM=U("M"), uC=U("C"), uN=U("NEG"), uW=U("RAIN");
+
+// colour choice: from the pitch, a fixed spectral colour, rainbow, white, or black on white
+const COLOURS = [
+  { id: "auto",   name: "From the pitch", hint: "each note glows its own colour", cls: "auto" },
+  { id: "red",    name: "Red",    nm: 680 }, { id: "orange", name: "Orange", nm: 610 },
+  { id: "yellow", name: "Yellow", nm: 578 },
+  { id: "green",  name: "Green",  nm: 525 }, { id: "cyan",   name: "Cyan",   nm: 492 },
+  { id: "blue",   name: "Blue",   nm: 465 }, { id: "indigo", name: "Indigo", nm: 440 },
+  { id: "violet", name: "Violet", nm: 410 },
+  { id: "rain",   name: "Rainbow", hint: "the whole spectrum at once", cls: "rain" },
+  { id: "white",  name: "White on black", cls: "white" },
+  { id: "neg",    name: "Black on white", hint: "white light, inverted", cls: "neg" },
+];
+let colour = "auto", negative = false;
+function pickColour(id, save) {
+  colour = id;
+  const c = COLOURS.find(c => c.id === id) || COLOURS[0];
+  if (id === "neg") { negative = true; $("negative").checked = true; }
+  else if (id === "white" && save) { negative = false; $("negative").checked = false; }
+  [...$("swatches").children].forEach(b => { const on = b.dataset.id === id; b.classList.toggle("sel", on); b.setAttribute("aria-pressed", on); });
+  $("swName").innerHTML = `<b>${c.name}</b>` + (c.nm ? ` · ${c.nm} nm` : "") + (c.hint ? ` · ${c.hint}` : "");
+  if (save) try { localStorage.setItem("cym-colour", JSON.stringify({ colour, negative })); } catch (e) {}
+}
+COLOURS.forEach(c => {
+  const b = document.createElement("button");
+  b.className = "sw" + (c.cls ? " " + c.cls : ""); b.dataset.id = c.id; b.title = c.name; b.setAttribute("aria-label", c.name);
+  if (c.nm) b.style.background = `rgb(${nmToRGB(c.nm).map(x => x * 255 | 0)})`;
+  b.onclick = () => pickColour(c.id, true);
+  $("swatches").appendChild(b);
+});
+$("negative").onchange = e => {
+  negative = e.target.checked;
+  if (!negative && colour === "neg") { pickColour("white", false); }
+  try { localStorage.setItem("cym-colour", JSON.stringify({ colour, negative })); } catch (err) {}
+};
+try { const s = JSON.parse(localStorage.getItem("cym-colour") || "null"); if (s) { negative = !!s.negative; $("negative").checked = negative; pickColour(s.colour || "auto", false); } else pickColour("auto", false); }
+catch (e) { pickColour("auto", false); }
+function chosenRGB(pitchRGB) {
+  if (colour === "auto") return pitchRGB;
+  if (colour === "white" || colour === "neg" || colour === "rain") return [1, 1, 1];
+  const c = COLOURS.find(c => c.id === colour); return nmToRGB(c.nm);
+}
 
 function resize(){
   const dpr = Math.min(window.devicePixelRatio||1, 2), r = cv.getBoundingClientRect();
@@ -477,7 +539,7 @@ function resize(){
 }
 new ResizeObserver(resize).observe(cv); resize();
 
-let colSm = nmToRGB(620), lastHud = 0;
+let colSm = nmToRGB(620), lastHud = 0, negSm = 0;
 const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
 function frame(t){
   analyse();
@@ -488,7 +550,10 @@ function frame(t){
   levelSm += (tgtLevel - levelSm) * 0.15;
   mediumSm += (medium - mediumSm) * 0.08;
   const L = soundToLight(freqSm), rgb = nmToRGB(L.nm);
-  colSm = colSm.map((c,i) => c + (rgb[i]-c)*0.1);
+  const want = chosenRGB(rgb);
+  colSm = colSm.map((c,i) => c + (want[i]-c)*0.1);
+  negSm += ((negative ? 1 : 0) - negSm) * 0.12;
+  gl.uniform1f(uN, negSm); gl.uniform1f(uW, colour === "rain" ? 1 : 0);
   const a = Math.sqrt(freqSm/12);
   gl.uniform2f(uR, cv.width, cv.height); gl.uniform1f(uT, reduce ? 0 : t/1000);
   gl.uniform1f(uA, a); gl.uniform1f(uL, levelSm); gl.uniform1f(uM, mediumSm); gl.uniform3fv(uC, colSm);
@@ -521,21 +586,22 @@ function compose() {
   const W = comp.width, H = comp.height, u = Math.min(W, H) / 100, pad = u * 5;
   cx.drawImage(cv, 0, 0, W, H);
   if (!$("caption").checked) return;
-  const g = cx.createLinearGradient(0, H * 0.62, 0, H);
-  g.addColorStop(0, "rgba(5,6,10,0)"); g.addColorStop(1, "rgba(5,6,10,0.8)");
+  const g = cx.createLinearGradient(0, H * 0.62, 0, H), shade = negative ? "250,250,252" : "5,6,10";
+  g.addColorStop(0, `rgba(${shade},0)`); g.addColorStop(1, `rgba(${shade},0.8)`);
   cx.fillStyle = g; cx.fillRect(0, H * 0.62, W, H * 0.38);
   cx.textBaseline = "alphabetic";
-  cx.font = `300 ${u * 2.2}px Sora, system-ui, sans-serif`; cx.fillStyle = "rgba(231,233,242,0.55)";
+  const ink = negative ? "#05060a" : "#e7e9f2";
+  cx.font = `300 ${u * 2.2}px Sora, system-ui, sans-serif`; cx.fillStyle = negative ? "rgba(5,6,10,0.55)" : "rgba(231,233,242,0.55)";
   cx.fillText("E T H E R ' S   C Y M A T I C", pad, pad + u * 2);
   if (label) {
     let size = u * 8; cx.font = `600 ${size}px Sora, system-ui, sans-serif`;
     const w = cx.measureText(label).width, max = W - pad * 2;
     if (w > max) { size *= max / w; cx.font = `600 ${size}px Sora, system-ui, sans-serif`; }
-    cx.fillStyle = "#e7e9f2"; cx.fillText(label, pad, H - pad - u * 4.5);
+    cx.fillStyle = ink; cx.fillText(label, pad, H - pad - u * 4.5);
   }
-  const L = soundToLight(freqSm), rgb = nmToRGB(L.nm).map(x => x * 255 | 0);
+  const L = soundToLight(freqSm), rgb = colSm.map(x => x * 255 | 0);
   cx.font = `400 ${u * 2.6}px "JetBrains Mono", ui-monospace, monospace`;
-  cx.fillStyle = `rgb(${rgb})`;
+  cx.fillStyle = negative || colour === "rain" || colour === "white" ? ink : `rgb(${rgb})`;
   cx.fillText(`${freqSm.toFixed(1)} Hz · ${noteName(freqSm)} · ${Math.round(L.nm)} nm · ${medium ? "water" : "sand plate"}`, pad, H - pad);
 }
 const slug = () => (label || "cymatic").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "cymatic";
