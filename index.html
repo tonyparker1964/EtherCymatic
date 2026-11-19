@@ -655,26 +655,33 @@ float plate(vec2 p, float a){
   float w = 0.5 + 0.5*sin(a*2.1);
   return mix(s, s2, w);
 }
-float ring(vec2 p, float N, float k){
+// Free-forming wave fields for water and plasma. Each spectral peak of the sound (fundamental,
+// overtones, other notes) sends waves across the surface from 7 irregular directions; where
+// they cancel, the surface is still and light gathers, as sand does on the plate. Nothing is
+// centred: directions and phases come from the pitch itself, so each tone draws its own figure.
+uniform vec4 SP[6];   // per peak: water wavenumber, plasma wavenumber, share of loudness, seed
+float waveField(vec2 p, float plasmaSel){
   float v = 0.0;
-  for (int i=0;i<16;i++){ if (float(i) >= N) break;
-    float th = PI*float(i)/N; v += cos(k*dot(p, vec2(cos(th), sin(th))) + T*0.6*0.0); }
-  return v/N;
+  for (int j = 0; j < 6; j++) {
+    vec4 c = SP[j];
+    if (c.z <= 0.0) continue;
+    float k = mix(c.x, c.y, plasmaSel), s = 0.0;
+    for (int d = 0; d < 7; d++) {
+      float fd = float(d);
+      float h1 = hash(vec2(c.w*91.7 + fd, 3.1)), h2 = hash(vec2(c.w*53.3 + fd, 7.7));
+      float ang = 6.2831853*(fd/7.0) + (h1 - 0.5)*0.9;
+      s += cos(k*dot(p, vec2(cos(ang), sin(ang))) + 6.2831853*h2 + T*0.35*(h1 - 0.5));
+    }
+    v += c.z * s * 0.378;
+  }
+  return v;
 }
-float water(vec2 p, float a){
-  float k = a*5.0, N = 3.0 + mod(a*1.3, 9.0), f = fract(N);
-  float r = length(p);
-  float v = mix(ring(p, floor(N), k), ring(p, floor(N)+1.0, k), smoothstep(0.0,1.0,f));
-  return v*0.75 + 0.25*cos(k*r*1.3 - T*1.5);
-}
-// plasma: writhing filaments from a bright core, like a plasma globe; the pitch sets how many
-float plasma(vec2 p, float a){
-  float r = length(p), th = atan(p.y, p.x);
-  float N = floor(3.0 + mod(a*1.3, 9.0)), k = a*2.2;
-  float w = th + 0.45*r*sin(k*r*0.7 - T*(1.2 + 2.5*L) + th*2.0) + 0.15*sin(T*0.7 + r*5.0);
-  float fil = sin(N*w) * (0.35 + r);
-  float shell = cos(k*r*1.6 - T*(2.0 + 3.0*L));
-  return fil * (0.6 + 0.4*shell);
+// water: capillary ripples on a liquid surface (Faraday waves at half the driving pitch)
+float water(vec2 p){ return waveField(p, 0.0); }
+// plasma: the same kind of field, torn and bent by fast-moving charge, so the lines crackle and wander
+float plasma(vec2 p){
+  vec2 q = p + 0.28*(vec2(fbm(p*1.8 + vec2(T*0.9, 0.0)), fbm(p*1.8 + vec2(0.0, -T*0.8) + 4.3)) - 0.5)*(1.0 + L);
+  return waveField(q, 1.0);
 }
 void main(){
   vec2 uv = (gl_FragCoord.xy - 0.5*R) / min(R.x, R.y) * 2.15;
@@ -685,8 +692,8 @@ void main(){
   vec2 flow = vec2(fbm(uv*1.7 + vec2(T*0.11, -T*0.07)), fbm(uv*1.7 + vec2(-T*0.09, T*0.13) + 5.2)) - 0.5;
   vec2 wuv = uv + flow * (0.22*uf*uf + 0.014*(0.4 + L));
   float vp = PHY > 0.5 ? realPlate(wuv) : plate(wuv*0.5 + jitter, a);
-  float vw = water(wuv*0.95, a);
-  float vz = plasma(wuv*0.95, a);
+  float vw = M > 0.02 && M < 1.98 ? water(wuv) : 0.0;
+  float vz = M > 1.02 ? plasma(wuv) : 0.0;
   float wP = clamp(1.0 - M, 0.0, 1.0), wW = clamp(1.0 - abs(M - 1.0), 0.0, 1.0), wZ = clamp(M - 1.0, 0.0, 1.0);
   float v = vp*wP + vw*wW + vz*wZ;
   float Mc = clamp(M, 0.0, 1.0);
@@ -703,7 +710,7 @@ void main(){
   float seed = fbm(uv*2.3 + 11.0);
   float appear = smoothstep(seed - 0.05, seed + 0.25, G*1.3);
   float rr = length(uv);
-  core *= appear * mix(1.0, smoothstep(0.04, 0.45, rr), wZ);   // plasma: no glare where filaments meet
+  core *= appear;
   halo *= mix(0.3, 1.0, appear);
   float body = (0.5+0.5*v)*0.05;
   vec3 base = C;
@@ -732,7 +739,29 @@ gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,3,-1,-1,3]), gl.STATIC_DR
 const loc = gl.getAttribLocation(pr, "p"); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
 const U = n => gl.getUniformLocation(pr, n);
 const uR=U("R"), uT=U("T"), uA=U("A"), uL=U("L"), uM=U("M"), uC=U("C"), uN=U("NEG"), uW=U("RAIN"), uV=U("VIS");
-const uBRI=U("BRI"), uSTR=U("STR");
+const uBRI=U("BRI"), uSTR=U("STR"), uSP=U("SP[0]");
+// Water ripples: deep-water capillary-gravity waves, ω² = g·k + (σ/ρ)·k³, driven at half the
+// sound's pitch (Faraday). The view shows a 2 cm wide patch of the surface.
+const G_ACC = 9.81, SIGMA_RHO = 0.0728 / 1000, VIEW_HALF_M = 0.01;
+function rippleK(f) {
+  const w2 = Math.pow(2*Math.PI*f, 2);
+  let k = Math.cbrt(w2 / SIGMA_RHO);
+  for (let i = 0; i < 6; i++) k -= (G_ACC*k + SIGMA_RHO*k*k*k - w2) / (G_ACC + 3*SIGMA_RHO*k*k);
+  return k;
+}
+const sp = new Float32Array(24);
+let rippleMm = 0;
+function waveModel() {
+  sp.fill(0);
+  const peaks = spec.slice(0, 6), tot = peaks.reduce((s, x) => s + x.a, 0) || 1;
+  peaks.forEach((c, j) => {
+    const kWater = rippleK(c.f / 2) * VIEW_HALF_M;
+    const kPlasma = Math.sqrt(c.f / 12) * 3.5;
+    const q = Math.round(48 * Math.log2(c.f / 440));       // seed per quarter-semitone, so a held note stays still
+    sp[j*4] = kWater; sp[j*4+1] = kPlasma; sp[j*4+2] = c.a / tot; sp[j*4+3] = ((q * 0.61803) % 1 + 1) % 1;
+    if (j === 0) rippleMm = 2*Math.PI / rippleK(c.f / 2) * 1000;
+  });
+}
 let strength = 2;
 try { const v = +localStorage.getItem("cym-strength"); if (v >= 100 && v <= 400) $("strength").value = v; } catch (e) {}
 function setStrength() { strength = +$("strength").value / 100; $("strengthOut").textContent = $("strength").value + "%"; }
@@ -845,7 +874,7 @@ function frame(t){
   const a = Math.sqrt(patternHz/12);   // when the sound stops the figure melts where it is, without moving
   gl.uniform2f(uR, cv.width, cv.height); gl.uniform1f(uT, reduce ? 0 : t/1000);
   gl.uniform1f(uA, a); gl.uniform1f(uL, levelSm); gl.uniform1f(uM, mediumSm); gl.uniform3fv(uC, colSm);
-  plateInfo = plateModel(); psSm += (plateInfo.strength - psSm) * 0.15;
+  plateInfo = plateModel(); waveModel(); gl.uniform4fv(uSP, sp); psSm += (plateInfo.strength - psSm) * 0.15;
   gl.uniform4fv(uPM, pm); gl.uniform1f(uPN, plateInfo.meanE); gl.uniform1f(uPS, psSm); gl.uniform1f(uPHY, physics ? 1 : 0);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
   if (rec) { compose(); }
@@ -856,9 +885,8 @@ function frame(t){
     $("noteOut").textContent = noteName(freqSm);
     $("nmOut").textContent = Math.round(L.nm) + " nm"; $("octOut").textContent = L.oct;
     $("sw").style.color = `rgb(${rgb.map(x=>x*255|0)})`;
-    const fold = Math.floor(3 + (a*1.3)%9);
     const b = plateInfo.best;
-    $("modeOut").textContent = medium === 2 ? `${fold*2} filaments` : medium ? `${fold}-fold`
+    $("modeOut").textContent = medium === 2 ? `free discharge` : medium ? `ripples ${rippleMm.toFixed(2)} mm`
       : physics && b ? `mode (${b.n},${b.m})${b.sg > 0 ? "+" : "−"} ${Math.round(b.f)} Hz · ${Math.round(psSm*100)}% resonant` : `${a.toFixed(1)} · ${(a*0.62+1).toFixed(1)}`;
   }
   requestAnimationFrame(frame);
