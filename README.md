@@ -2,8 +2,8 @@
 
 A browser app that turns words, tones, songs and your voice into glowing cymatic light patterns.
 
-**Open the app:** https://tonyparker1964.github.io/Ether-s-Cymatic/
-**About:** https://tonyparker1964.github.io/Ether-s-Cymatic/about.html
+**Open the app:** https://tonyparker1964.github.io/EtherCymatic/
+**About:** https://tonyparker1964.github.io/EtherCymatic/about.html
 
 ## Features
 
